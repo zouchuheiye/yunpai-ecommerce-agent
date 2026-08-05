@@ -18,7 +18,7 @@
       "title": "晴川空气炸锅 5L 云白款",
       "status": "active",
       "sale_price": "499.00",
-      "attributes": {"brand": "晴川", "category": "空气炸锅", "model": "AF5", "capacity_l": 5, "color": "云白", "warranty_months": 12}
+      "attributes": {"brand": "晴川", "category": "空气炸锅", "model": "AF5", "gtin": "06912345670001", "capacity": "5L", "capacity_l": 5, "color": "云白", "warranty_months": 12}
     },
     {
       "item_id": "QC-SPU-AF5",
@@ -34,7 +34,7 @@
       "title": "晴川无线吸尘器 A1",
       "status": "active",
       "sale_price": "899.00",
-      "attributes": {"brand": "晴川", "category": "无线吸尘器", "model": "VC-A1", "runtime_min": 45, "warranty_months": 24}
+      "attributes": {"brand": "晴川", "category": "无线吸尘器", "model": "VC-A1", "gtin": "06912345670002", "runtime": "45分钟", "runtime_min": 45, "warranty_months": 24}
     },
     {
       "item_id": "QC-SPU-HM3",
@@ -42,7 +42,7 @@
       "title": "晴川静音加湿器 3L",
       "status": "active",
       "sale_price": "239.00",
-      "attributes": {"brand": "晴川", "category": "加湿器", "model": "HM-3L", "capacity_l": 3, "warranty_months": 12}
+      "attributes": {"brand": "晴川", "category": "加湿器", "model": "HM-3L", "capacity": "3L", "capacity_l": 3, "warranty_months": 12}
     },
     {
       "item_id": "QC-SPU-KT17",
