@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
 import re
+import sqlite3
 import unicodedata
 import uuid
 from datetime import UTC, datetime
@@ -9,7 +12,14 @@ from decimal import Decimal, ROUND_HALF_UP
 from difflib import SequenceMatcher
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from ..database import Database, utc_now
 from ..text_utils import redact_sensitive
@@ -273,6 +283,186 @@ class CompetitorObservationCreate(BaseModel):
         return self
 
 
+class CompetitiveDatasetRow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    connector_id: str = Field(min_length=1, max_length=128)
+    store_id: str = Field(min_length=1, max_length=128)
+    source_ref: str = Field(min_length=4, max_length=500)
+    source_type: CompetitorSource = "manual"
+    source_id: str = Field(min_length=1, max_length=256)
+    subject_sku: str = Field(min_length=1, max_length=128)
+    competitor_name: str = Field(min_length=1, max_length=200)
+    competitor_sku: str = Field(min_length=1, max_length=128)
+    product_title: str = Field(min_length=2, max_length=500)
+    brand: str | None = Field(default=None, max_length=128)
+    model: str | None = Field(default=None, max_length=128)
+    category: str | None = Field(default=None, max_length=200)
+    gtin: str | None = Field(default=None, max_length=64)
+    attributes: dict[str, str] = Field(default_factory=dict)
+    custom_dimensions: list[CompetitiveCustomDimension] = Field(
+        default_factory=list,
+        max_length=32,
+    )
+    comparison_keys: list[str] = Field(default_factory=list, max_length=20)
+    subject_price: Decimal = Field(gt=0)
+    competitor_price: Decimal = Field(gt=0)
+    currency: str = Field(default="CNY", min_length=3, max_length=3)
+    rating_value: Decimal | None = Field(default=None, ge=0)
+    rating_scale: Decimal | None = Field(default=None, gt=0)
+    sales_rank: int | None = Field(default=None, ge=1)
+    rank_scope: str | None = Field(default=None, min_length=1, max_length=200)
+    is_estimate: bool = True
+    observed_at: datetime
+    entity_match_id: str | None = Field(default=None, max_length=128)
+
+    @field_validator("observed_at")
+    @classmethod
+    def require_aware_observed_time(cls, value: datetime) -> datetime:
+        canonical_source_time(value)
+        return value
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not re.fullmatch(r"[A-Z]{3}", normalized):
+            raise ValueError("currency must be a three-letter code")
+        return normalized
+
+    @field_validator("rank_scope")
+    @classmethod
+    def normalize_rank_scope(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("rank_scope cannot be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_fact_pairs(self) -> "CompetitiveDatasetRow":
+        if self.source_type == "virtual" and not self.is_estimate:
+            raise ValueError("virtual dataset rows must be marked as estimates")
+        if (self.rating_value is None) != (self.rating_scale is None):
+            raise ValueError("rating_value and rating_scale must be provided together")
+        if (
+            self.rating_value is not None
+            and self.rating_scale is not None
+            and self.rating_value > self.rating_scale
+        ):
+            raise ValueError("rating_value cannot exceed rating_scale")
+        if (self.sales_rank is None) != (self.rank_scope is None):
+            raise ValueError("sales_rank and rank_scope must be provided together")
+        return self
+
+    def competitor_identity(self) -> CompetitiveProductIdentity:
+        return CompetitiveProductIdentity(
+            title=self.product_title,
+            brand=self.brand,
+            model=self.model,
+            category=self.category,
+            gtin=self.gtin,
+            attributes=self.attributes,
+            custom_dimensions=self.custom_dimensions,
+        )
+
+    def observation(self, match_id: str) -> CompetitorObservationCreate:
+        return CompetitorObservationCreate(
+            connector_id=self.connector_id,
+            store_id=self.store_id,
+            subject_sku=self.subject_sku,
+            competitor_name=self.competitor_name,
+            competitor_sku=self.competitor_sku,
+            subject_price=self.subject_price,
+            competitor_price=self.competitor_price,
+            currency=self.currency,
+            rating_value=self.rating_value,
+            rating_scale=self.rating_scale,
+            sales_rank=self.sales_rank,
+            rank_scope=self.rank_scope,
+            source_type=self.source_type,
+            source_ref=self.source_ref,
+            is_estimate=self.is_estimate,
+            observed_at=self.observed_at,
+            source_id=self.source_id,
+            entity_match_id=match_id,
+        )
+
+
+class CompetitiveDatasetRowError(ValueError):
+    def __init__(self, field: str, code: str, message: str):
+        super().__init__(message)
+        self.field = field
+        self.code = code
+        self.message = message
+
+
+COMPETITIVE_CSV_ALIASES = {
+    "source_id": "source_id",
+    "来源记录ID": "source_id",
+    "数据ID": "source_id",
+    "subject_sku": "subject_sku",
+    "自有SKU": "subject_sku",
+    "本店SKU": "subject_sku",
+    "competitor_name": "competitor_name",
+    "竞品名称": "competitor_name",
+    "竞品店铺": "competitor_name",
+    "competitor_sku": "competitor_sku",
+    "竞品SKU": "competitor_sku",
+    "product_title": "product_title",
+    "商品名称": "product_title",
+    "商品标题": "product_title",
+    "brand": "brand",
+    "品牌": "brand",
+    "model": "model",
+    "型号": "model",
+    "category": "category",
+    "品类": "category",
+    "类目": "category",
+    "gtin": "gtin",
+    "条码": "gtin",
+    "商品条码": "gtin",
+    "subject_price": "subject_price",
+    "自有价格": "subject_price",
+    "本店价格": "subject_price",
+    "competitor_price": "competitor_price",
+    "竞品价格": "competitor_price",
+    "售价": "competitor_price",
+    "currency": "currency",
+    "币种": "currency",
+    "rating_value": "rating_value",
+    "商品评分": "rating_value",
+    "评分": "rating_value",
+    "rating_scale": "rating_scale",
+    "评分满分": "rating_scale",
+    "满分": "rating_scale",
+    "sales_rank": "sales_rank",
+    "销量排名": "sales_rank",
+    "排名": "sales_rank",
+    "rank_scope": "rank_scope",
+    "排名范围": "rank_scope",
+    "榜单": "rank_scope",
+    "observed_at": "observed_at",
+    "采集时间": "observed_at",
+    "数据时间": "observed_at",
+    "entity_match_id": "entity_match_id",
+    "匹配ID": "entity_match_id",
+}
+
+COMPETITIVE_CSV_REQUIRED = {
+    "source_id",
+    "subject_sku",
+    "competitor_name",
+    "competitor_sku",
+    "product_title",
+    "subject_price",
+    "competitor_price",
+    "currency",
+    "observed_at",
+}
+
+
 class CompetitiveMonitorUpsert(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -304,95 +494,100 @@ class CompetitiveIntelligenceService:
         tenant_id: str,
         value: CompetitiveEntityMatchCreate,
     ) -> dict[str, Any]:
+        with self.db._write_lock, self.db.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result = self._record_entity_match_in_conn(conn, tenant_id, value)
+        return result
+
+    def _record_entity_match_in_conn(
+        self,
+        conn: Any,
+        tenant_id: str,
+        value: CompetitiveEntityMatchCreate,
+    ) -> dict[str, Any]:
         match_id = f"compmatch-{uuid.uuid4().hex}"
         now = utc_now()
         write_status = "applied"
-        with self.db._write_lock, self.db.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            subject_identity = self._f305_subject_identity(
-                conn,
-                tenant_id=tenant_id,
-                store_id=value.store_id,
-                subject_sku=value.subject_sku,
-            )
-            canonical_value = value.model_copy(
-                update={"subject_identity": subject_identity}
-            )
-            observed_at = canonical_source_time(canonical_value.observed_at)
-            payload = canonical_value.model_dump(mode="json")
-            payload["observed_at"] = observed_at
-            payload_hash = payload_digest(payload)
-            assessment = self._assess_entity_match(canonical_value)
-            existing = conn.execute(
+        subject_identity = self._f305_subject_identity(
+            conn,
+            tenant_id=tenant_id,
+            store_id=value.store_id,
+            subject_sku=value.subject_sku,
+        )
+        canonical_value = value.model_copy(update={"subject_identity": subject_identity})
+        observed_at = canonical_source_time(canonical_value.observed_at)
+        payload = canonical_value.model_dump(mode="json")
+        payload["observed_at"] = observed_at
+        payload_hash = payload_digest(payload)
+        assessment = self._assess_entity_match(canonical_value)
+        existing = conn.execute(
+            """
+            SELECT * FROM competitive_entity_matches
+            WHERE tenant_id=? AND connector_id=? AND source_id=?
+            """,
+            (tenant_id, canonical_value.connector_id, canonical_value.source_id),
+        ).fetchone()
+        if existing is not None:
+            if str(existing["payload_hash"]) != payload_hash:
+                raise ValueError("competitive_match_version_conflict")
+            match_id = str(existing["id"])
+            write_status = "idempotent"
+        else:
+            conn.execute(
                 """
-                SELECT * FROM competitive_entity_matches
-                WHERE tenant_id=? AND connector_id=? AND source_id=?
+                INSERT INTO competitive_entity_matches(
+                    id, tenant_id, connector_id, store_id, subject_sku,
+                    competitor_name, competitor_sku, source_type, source_ref,
+                    source_id, is_estimate, observed_at, subject_identity_json,
+                    competitor_identity_json, comparison_keys_json, score,
+                    matched_fields_json, conflicts_json, missing_fields_json,
+                    recommended_status, status, payload_hash, record_version,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                          'pending', ?, 1, ?, ?)
                 """,
-                (tenant_id, canonical_value.connector_id, canonical_value.source_id),
-            ).fetchone()
-            if existing is not None:
-                if str(existing["payload_hash"]) != payload_hash:
-                    raise ValueError("competitive_match_version_conflict")
-                match_id = str(existing["id"])
-                write_status = "idempotent"
-            else:
-                conn.execute(
-                    """
-                    INSERT INTO competitive_entity_matches(
-                        id, tenant_id, connector_id, store_id, subject_sku,
-                        competitor_name, competitor_sku, source_type, source_ref,
-                        source_id, is_estimate, observed_at, subject_identity_json,
-                        competitor_identity_json, comparison_keys_json, score,
-                        matched_fields_json, conflicts_json, missing_fields_json,
-                        recommended_status, status, payload_hash, record_version,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                              'pending', ?, 1, ?, ?)
-                    """,
-                    (
-                        match_id,
-                        tenant_id,
-                        canonical_value.connector_id,
-                        canonical_value.store_id,
-                        canonical_value.subject_sku,
-                        canonical_value.competitor_name,
-                        canonical_value.competitor_sku,
-                        canonical_value.source_type,
-                        canonical_value.source_ref,
-                        canonical_value.source_id,
-                        int(canonical_value.is_estimate),
-                        observed_at,
-                        json.dumps(
-                            canonical_value.subject_identity.model_dump(mode="json"),
-                            ensure_ascii=False,
-                            sort_keys=True,
-                        ),
-                        json.dumps(
-                            canonical_value.competitor_identity.model_dump(mode="json"),
-                            ensure_ascii=False,
-                            sort_keys=True,
-                        ),
-                        json.dumps(canonical_value.comparison_keys, ensure_ascii=False),
-                        assessment["score"],
-                        json.dumps(
-                            assessment["matched_fields"], ensure_ascii=False, sort_keys=True
-                        ),
-                        json.dumps(
-                            assessment["conflicts"], ensure_ascii=False, sort_keys=True
-                        ),
-                        json.dumps(
-                            assessment["missing_fields"], ensure_ascii=False
-                        ),
-                        assessment["recommended_status"],
-                        payload_hash,
-                        now,
-                        now,
+                (
+                    match_id,
+                    tenant_id,
+                    canonical_value.connector_id,
+                    canonical_value.store_id,
+                    canonical_value.subject_sku,
+                    canonical_value.competitor_name,
+                    canonical_value.competitor_sku,
+                    canonical_value.source_type,
+                    canonical_value.source_ref,
+                    canonical_value.source_id,
+                    int(canonical_value.is_estimate),
+                    observed_at,
+                    json.dumps(
+                        canonical_value.subject_identity.model_dump(mode="json"),
+                        ensure_ascii=False,
+                        sort_keys=True,
                     ),
-                )
-            row = conn.execute(
-                "SELECT * FROM competitive_entity_matches WHERE id=? AND tenant_id=?",
-                (match_id, tenant_id),
-            ).fetchone()
+                    json.dumps(
+                        canonical_value.competitor_identity.model_dump(mode="json"),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    json.dumps(canonical_value.comparison_keys, ensure_ascii=False),
+                    assessment["score"],
+                    json.dumps(
+                        assessment["matched_fields"], ensure_ascii=False, sort_keys=True
+                    ),
+                    json.dumps(
+                        assessment["conflicts"], ensure_ascii=False, sort_keys=True
+                    ),
+                    json.dumps(assessment["missing_fields"], ensure_ascii=False),
+                    assessment["recommended_status"],
+                    payload_hash,
+                    now,
+                    now,
+                ),
+            )
+        row = conn.execute(
+            "SELECT * FROM competitive_entity_matches WHERE id=? AND tenant_id=?",
+            (match_id, tenant_id),
+        ).fetchone()
         result = self._match_view(dict(row))
         result["write_status"] = write_status
         return result
@@ -774,6 +969,22 @@ class CompetitiveIntelligenceService:
         }
 
     def record(self, tenant_id: str, value: CompetitorObservationCreate) -> dict[str, Any]:
+        with self.db._write_lock, self.db.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result = self._record_observation_in_conn(conn, tenant_id, value)
+        result["alert_evaluation"] = self.evaluate_scope(
+            tenant_id,
+            store_id=value.store_id,
+            subject_sku=value.subject_sku,
+        )
+        return result
+
+    def _record_observation_in_conn(
+        self,
+        conn: Any,
+        tenant_id: str,
+        value: CompetitorObservationCreate,
+    ) -> dict[str, Any]:
         observation_id = f"competitor-{uuid.uuid4().hex}"
         observed_at = canonical_source_time(value.observed_at)
         payload = value.model_dump(mode="json")
@@ -781,139 +992,424 @@ class CompetitiveIntelligenceService:
         payload_hash = payload_digest(payload)
         now = utc_now()
         write_status = "applied"
-        with self.db._write_lock, self.db.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            if value.entity_match_id:
-                match_row = conn.execute(
-                    """
-                    SELECT * FROM competitive_entity_matches
-                    WHERE id=? AND tenant_id=?
-                    """,
-                    (value.entity_match_id, tenant_id),
-                ).fetchone()
-                if match_row is None:
-                    raise ValueError("competitive_match_not_found")
-                match = dict(match_row)
-                if any(
-                    str(match[field]) != str(expected)
-                    for field, expected in (
-                        ("store_id", value.store_id),
-                        ("subject_sku", value.subject_sku),
-                        ("competitor_name", value.competitor_name),
-                        ("competitor_sku", value.competitor_sku),
-                    )
-                ):
-                    raise ValueError("competitive_match_scope_mismatch")
-            if value.source_id:
-                existing = conn.execute(
-                    """
-                    SELECT * FROM competitor_observations
-                    WHERE tenant_id=? AND connector_id=? AND source_id=?
-                    ORDER BY observed_at DESC
-                    LIMIT 1
-                    """,
-                    (tenant_id, value.connector_id, value.source_id),
-                ).fetchone()
-            else:
-                existing = conn.execute(
-                    """
-                    SELECT * FROM competitor_observations
-                    WHERE tenant_id=? AND connector_id=? AND store_id=?
-                      AND subject_sku=? AND competitor_sku=? AND observed_at=?
-                    """,
-                    (
-                        tenant_id, value.connector_id, value.store_id,
-                        value.subject_sku, value.competitor_sku, observed_at,
-                    ),
-                ).fetchone()
-            if existing is not None:
-                existing_hash = str(existing["payload_hash"] or "")
-                if not existing_hash:
-                    legacy = CompetitorObservationCreate(
-                        connector_id=existing["connector_id"],
-                        store_id=existing["store_id"],
-                        subject_sku=existing["subject_sku"],
-                        competitor_name=existing["competitor_name"],
-                        competitor_sku=existing["competitor_sku"],
-                        subject_price=existing["subject_price"],
-                        competitor_price=existing["competitor_price"],
-                        currency=existing["currency"],
-                        source_type=existing["source_type"],
-                        source_ref=existing["source_ref"],
-                        is_estimate=bool(existing["is_estimate"]),
-                        observed_at=existing["observed_at"],
-                        source_id=existing["source_id"],
-                    ).model_dump(mode="json")
-                    legacy["observed_at"] = str(existing["observed_at"])
-                    existing_hash = payload_digest(legacy)
-                legacy_payload = dict(payload)
-                legacy_payload.pop("entity_match_id", None)
-                legacy_hash = payload_digest(legacy_payload)
-                comparable_hash = (
-                    legacy_hash if existing_hash == legacy_hash else payload_hash
+        if value.entity_match_id:
+            match_row = conn.execute(
+                """
+                SELECT * FROM competitive_entity_matches
+                WHERE id=? AND tenant_id=?
+                """,
+                (value.entity_match_id, tenant_id),
+            ).fetchone()
+            if match_row is None:
+                raise ValueError("competitive_match_not_found")
+            match = dict(match_row)
+            if any(
+                str(match[field]) != str(expected)
+                for field, expected in (
+                    ("store_id", value.store_id),
+                    ("subject_sku", value.subject_sku),
+                    ("competitor_name", value.competitor_name),
+                    ("competitor_sku", value.competitor_sku),
                 )
-                write_decision = decide_write(
-                    existing_source_time=str(existing["observed_at"]),
-                    existing_payload_hash=existing_hash,
-                    incoming_source_time=observed_at,
-                    incoming_payload_hash=comparable_hash,
-                )
-                if write_decision == "idempotent":
-                    write_status = "idempotent"
-                    observation_id = str(existing["id"])
-                    if not existing["payload_hash"]:
-                        conn.execute(
-                            "UPDATE competitor_observations SET payload_hash=? WHERE id=?",
-                            (payload_hash, observation_id),
-                        )
-                else:
-                    existing = None
-            if existing is None:
-                conn.execute(
-                    """
-                    INSERT INTO competitor_observations(
-                        id, tenant_id, connector_id, store_id, subject_sku,
-                        competitor_name, competitor_sku, subject_price, competitor_price,
-                        currency, rating_value, rating_scale, sales_rank, rank_scope,
-                        source_type, source_ref, is_estimate, observed_at, source_id,
-                        created_at, payload_hash, entity_match_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        observation_id, tenant_id, value.connector_id, value.store_id,
-                        value.subject_sku, value.competitor_name, value.competitor_sku,
-                        str(value.subject_price), str(value.competitor_price),
-                        value.currency.upper(),
-                        str(value.rating_value) if value.rating_value is not None else None,
-                        str(value.rating_scale) if value.rating_scale is not None else None,
-                        value.sales_rank, value.rank_scope, value.source_type, value.source_ref,
-                        int(value.is_estimate), observed_at, value.source_id, now,
-                        payload_hash, value.entity_match_id,
-                    ),
-                )
-            row = conn.execute(
+            ):
+                raise ValueError("competitive_match_scope_mismatch")
+        if value.source_id:
+            existing = conn.execute(
+                """
+                SELECT * FROM competitor_observations
+                WHERE tenant_id=? AND connector_id=? AND source_id=?
+                ORDER BY observed_at DESC
+                LIMIT 1
+                """,
+                (tenant_id, value.connector_id, value.source_id),
+            ).fetchone()
+        else:
+            existing = conn.execute(
                 """
                 SELECT * FROM competitor_observations
                 WHERE tenant_id=? AND connector_id=? AND store_id=?
                   AND subject_sku=? AND competitor_sku=? AND observed_at=?
                 """,
                 (
-                    tenant_id,
-                    value.connector_id,
-                    value.store_id,
-                    value.subject_sku,
-                    value.competitor_sku,
-                    observed_at,
+                    tenant_id, value.connector_id, value.store_id,
+                    value.subject_sku, value.competitor_sku, observed_at,
                 ),
             ).fetchone()
+        if existing is not None:
+            existing_hash = str(existing["payload_hash"] or "")
+            if not existing_hash:
+                legacy = CompetitorObservationCreate(
+                    connector_id=existing["connector_id"],
+                    store_id=existing["store_id"],
+                    subject_sku=existing["subject_sku"],
+                    competitor_name=existing["competitor_name"],
+                    competitor_sku=existing["competitor_sku"],
+                    subject_price=existing["subject_price"],
+                    competitor_price=existing["competitor_price"],
+                    currency=existing["currency"],
+                    source_type=existing["source_type"],
+                    source_ref=existing["source_ref"],
+                    is_estimate=bool(existing["is_estimate"]),
+                    observed_at=existing["observed_at"],
+                    source_id=existing["source_id"],
+                ).model_dump(mode="json")
+                legacy["observed_at"] = str(existing["observed_at"])
+                existing_hash = payload_digest(legacy)
+            legacy_payload = dict(payload)
+            legacy_payload.pop("entity_match_id", None)
+            legacy_hash = payload_digest(legacy_payload)
+            comparable_hash = legacy_hash if existing_hash == legacy_hash else payload_hash
+            write_decision = decide_write(
+                existing_source_time=str(existing["observed_at"]),
+                existing_payload_hash=existing_hash,
+                incoming_source_time=observed_at,
+                incoming_payload_hash=comparable_hash,
+            )
+            if write_decision == "idempotent":
+                write_status = "idempotent"
+                observation_id = str(existing["id"])
+                if not existing["payload_hash"]:
+                    conn.execute(
+                        "UPDATE competitor_observations SET payload_hash=? WHERE id=?",
+                        (payload_hash, observation_id),
+                    )
+            else:
+                existing = None
+        if existing is None:
+            conn.execute(
+                """
+                INSERT INTO competitor_observations(
+                    id, tenant_id, connector_id, store_id, subject_sku,
+                    competitor_name, competitor_sku, subject_price, competitor_price,
+                    currency, rating_value, rating_scale, sales_rank, rank_scope,
+                    source_type, source_ref, is_estimate, observed_at, source_id,
+                    created_at, payload_hash, entity_match_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    observation_id, tenant_id, value.connector_id, value.store_id,
+                    value.subject_sku, value.competitor_name, value.competitor_sku,
+                    str(value.subject_price), str(value.competitor_price),
+                    value.currency.upper(),
+                    str(value.rating_value) if value.rating_value is not None else None,
+                    str(value.rating_scale) if value.rating_scale is not None else None,
+                    value.sales_rank, value.rank_scope, value.source_type, value.source_ref,
+                    int(value.is_estimate), observed_at, value.source_id, now,
+                    payload_hash, value.entity_match_id,
+                ),
+            )
+        row = conn.execute(
+            "SELECT * FROM competitor_observations WHERE id=? AND tenant_id=?",
+            (observation_id, tenant_id),
+        ).fetchone()
         result = self._view(dict(row))
         result["write_status"] = write_status
-        result["alert_evaluation"] = self.evaluate_scope(
-            tenant_id,
-            store_id=value.store_id,
-            subject_sku=value.subject_sku,
-        )
         return result
+
+    def record_dataset(
+        self,
+        tenant_id: str,
+        value: CompetitiveDatasetRow,
+    ) -> dict[str, Any]:
+        competitor_identity = value.competitor_identity()
+        identity_json = json.dumps(
+            competitor_identity.model_dump(mode="json"),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        with self.db._write_lock, self.db.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if value.entity_match_id:
+                match_row = conn.execute(
+                    "SELECT * FROM competitive_entity_matches WHERE id=? AND tenant_id=?",
+                    (value.entity_match_id, tenant_id),
+                ).fetchone()
+                if match_row is None:
+                    raise ValueError("competitive_match_not_found")
+                match_result = self._match_view(dict(match_row))
+            else:
+                match_row = conn.execute(
+                    """
+                    SELECT * FROM competitive_entity_matches
+                    WHERE tenant_id=? AND store_id=? AND subject_sku=?
+                      AND competitor_name=? AND competitor_sku=?
+                      AND competitor_identity_json=?
+                      AND status IN ('pending', 'approved')
+                    ORDER BY CASE status WHEN 'approved' THEN 0 ELSE 1 END,
+                             updated_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (
+                        tenant_id,
+                        value.store_id,
+                        value.subject_sku,
+                        value.competitor_name,
+                        value.competitor_sku,
+                        identity_json,
+                    ),
+                ).fetchone()
+                if match_row is not None:
+                    match_result = self._match_view(dict(match_row))
+                    match_result["write_status"] = "idempotent"
+                else:
+                    relation_payload = {
+                        "tenant_id": tenant_id,
+                        "store_id": value.store_id,
+                        "subject_sku": value.subject_sku,
+                        "competitor_name": value.competitor_name,
+                        "competitor_sku": value.competitor_sku,
+                        "competitor_identity": competitor_identity.model_dump(mode="json"),
+                    }
+                    match_result = self._record_entity_match_in_conn(
+                        conn,
+                        tenant_id,
+                        CompetitiveEntityMatchCreate(
+                            connector_id=value.connector_id,
+                            store_id=value.store_id,
+                            subject_sku=value.subject_sku,
+                            competitor_name=value.competitor_name,
+                            competitor_sku=value.competitor_sku,
+                            subject_identity=CompetitiveProductIdentity(
+                                title="F-305 subject snapshot"
+                            ),
+                            competitor_identity=competitor_identity,
+                            comparison_keys=value.comparison_keys,
+                            source_type=value.source_type,
+                            source_ref=value.source_ref,
+                            source_id=f"dataset-match:{payload_digest(relation_payload)}",
+                            is_estimate=value.is_estimate,
+                            observed_at=value.observed_at,
+                        ),
+                    )
+            observation_result = self._record_observation_in_conn(
+                conn,
+                tenant_id,
+                value.observation(str(match_result["id"])),
+            )
+            signal_rows = conn.execute(
+                """
+                SELECT s.*, m.status AS match_status, m.score AS match_score
+                FROM competitive_signals s
+                JOIN competitive_entity_matches m ON m.id=s.match_id
+                WHERE s.tenant_id=? AND s.match_id=?
+                ORDER BY s.observed_at DESC, s.created_at DESC
+                """,
+                (tenant_id, match_result["id"]),
+            ).fetchall()
+
+        write_status = str(observation_result["write_status"])
+        return {
+            "match": {key: item for key, item in match_result.items() if key != "write_status"},
+            "identity": competitor_identity.model_dump(mode="json"),
+            "latest_observation": {
+                key: item
+                for key, item in observation_result.items()
+                if key != "write_status"
+            },
+            "signals": [self._signal_view(dict(row)) for row in signal_rows],
+            "actionable": match_result["status"] == "approved",
+            "write_status": write_status,
+        }
+
+    def import_dataset_csv(
+        self,
+        tenant_id: str,
+        content: str,
+        *,
+        connector_id: str,
+        store_id: str,
+        source_ref: str,
+        source_type: CompetitorSource = "file_import",
+    ) -> dict[str, Any]:
+        reader = csv.DictReader(io.StringIO(content.lstrip("\ufeff")))
+        if not reader.fieldnames:
+            raise ValueError("competitive_csv_header_missing")
+        header_map = self._competitive_csv_header_map(reader.fieldnames)
+        raw_rows = list(reader)
+        if len(raw_rows) > 2000:
+            raise ValueError("competitive_csv_too_many_rows")
+
+        items: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        imported_count = 0
+        idempotent_count = 0
+        for row_number, raw_row in enumerate(raw_rows, start=1):
+            try:
+                normalized = self._normalize_competitive_csv_row(raw_row, header_map)
+                normalized.update(
+                    {
+                        "connector_id": connector_id,
+                        "store_id": store_id,
+                        "source_ref": source_ref,
+                        "source_type": source_type,
+                    }
+                )
+                result = self.record_dataset(
+                    tenant_id,
+                    CompetitiveDatasetRow.model_validate(normalized),
+                )
+                items.append(result)
+                if result["write_status"] == "idempotent":
+                    idempotent_count += 1
+                else:
+                    imported_count += 1
+            except Exception as exc:
+                errors.append(self._competitive_csv_error(row_number, exc))
+        return {
+            "total_rows": len(raw_rows),
+            "imported_count": imported_count,
+            "idempotent_count": idempotent_count,
+            "error_count": len(errors),
+            "items": items,
+            "errors": errors,
+        }
+
+    @staticmethod
+    def _competitive_csv_header_map(fieldnames: list[str]) -> dict[str, str]:
+        result: dict[str, str] = {}
+        canonical_seen: set[str] = set()
+        for raw_name in fieldnames:
+            name = str(raw_name or "").strip().lstrip("\ufeff")
+            canonical = COMPETITIVE_CSV_ALIASES.get(name)
+            if canonical is None and (name.startswith("dim.") or name.startswith("维度.")):
+                dimension_key = name.split(".", 1)[1].strip()
+                if not dimension_key:
+                    raise ValueError("competitive_csv_dimension_key_missing")
+                canonical = f"dim.{dimension_key}"
+            if canonical is None:
+                continue
+            if canonical in canonical_seen:
+                raise ValueError(f"competitive_csv_duplicate_column:{canonical}")
+            canonical_seen.add(canonical)
+            result[raw_name] = canonical
+        return result
+
+    @classmethod
+    def _normalize_competitive_csv_row(
+        cls,
+        raw_row: dict[str, Any],
+        header_map: dict[str, str],
+    ) -> dict[str, Any]:
+        normalized: dict[str, Any] = {}
+        custom_dimensions: list[dict[str, Any]] = []
+        for raw_name, canonical in header_map.items():
+            raw_value = raw_row.get(raw_name)
+            value = raw_value.strip() if isinstance(raw_value, str) else raw_value
+            if value in (None, ""):
+                continue
+            if canonical.startswith("dim."):
+                key = canonical.split(".", 1)[1]
+                custom_dimensions.append(
+                    {
+                        "key": key,
+                        "label": key,
+                        "value_type": "text",
+                        "value_text": str(value),
+                    }
+                )
+            else:
+                normalized[canonical] = value
+
+        for field in sorted(COMPETITIVE_CSV_REQUIRED):
+            if field not in normalized:
+                raise CompetitiveDatasetRowError(
+                    field,
+                    "field_required",
+                    f"{field} is required",
+                )
+        if ("rating_value" in normalized) != ("rating_scale" in normalized):
+            missing = "rating_scale" if "rating_value" in normalized else "rating_value"
+            present = "rating_value" if missing == "rating_scale" else "rating_scale"
+            raise CompetitiveDatasetRowError(
+                missing,
+                "field_required",
+                f"{missing} is required with {present}",
+            )
+        if ("sales_rank" in normalized) != ("rank_scope" in normalized):
+            missing = "rank_scope" if "sales_rank" in normalized else "sales_rank"
+            present = "sales_rank" if missing == "rank_scope" else "rank_scope"
+            raise CompetitiveDatasetRowError(
+                missing,
+                "field_required",
+                f"{missing} is required with {present}",
+            )
+        for field in ("subject_price", "competitor_price"):
+            normalized[field] = cls._clean_csv_decimal(normalized[field], field, money=True)
+        for field in ("rating_value", "rating_scale"):
+            if field in normalized:
+                normalized[field] = cls._clean_csv_decimal(
+                    normalized[field], field, money=False
+                )
+        if "sales_rank" in normalized:
+            match = re.fullmatch(r"(?:第\s*)?([0-9][0-9,]*)(?:\s*名)?", str(normalized["sales_rank"]))
+            if match is None:
+                raise CompetitiveDatasetRowError(
+                    "sales_rank", "integer_invalid", "sales_rank must be a positive integer"
+                )
+            normalized["sales_rank"] = int(match.group(1).replace(",", ""))
+        normalized["currency"] = str(normalized["currency"]).upper()
+        normalized["custom_dimensions"] = custom_dimensions
+        return normalized
+
+    @staticmethod
+    def _clean_csv_decimal(value: Any, field: str, *, money: bool) -> Decimal:
+        cleaned = unicodedata.normalize("NFKC", str(value)).strip()
+        if money:
+            cleaned = re.sub(r"^[¥￥$€£]\s*", "", cleaned)
+        cleaned = cleaned.replace(",", "")
+        try:
+            result = Decimal(cleaned)
+        except Exception as exc:
+            raise CompetitiveDatasetRowError(
+                field, "decimal_invalid", f"{field} must be a decimal number"
+            ) from exc
+        return result.quantize(Decimal("0.01")) if money else result
+
+    @staticmethod
+    def _competitive_csv_error(row_number: int, exc: Exception) -> dict[str, Any]:
+        if isinstance(exc, CompetitiveDatasetRowError):
+            field, code, message = exc.field, exc.code, exc.message
+        elif isinstance(exc, ValidationError):
+            first = exc.errors(include_url=False)[0]
+            field = ".".join(str(item) for item in first["loc"]) or "row"
+            code = "field_required" if first["type"] == "missing" else "value_invalid"
+            message = str(first["msg"])
+        elif isinstance(exc, sqlite3.IntegrityError):
+            field = "row"
+            code = "row_conflict"
+            message = "row conflicts with an existing observation"
+        else:
+            detail = str(exc)
+            known_errors = {
+                "stale_source_version": (
+                    "observed_at",
+                    "source version is older than the stored version",
+                ),
+                "source_version_conflict": (
+                    "source_id",
+                    "same source version has different content",
+                ),
+                "competitive_subject_sku_unavailable": (
+                    "subject_sku",
+                    "subject SKU is unavailable",
+                ),
+                "competitive_match_not_found": (
+                    "entity_match_id",
+                    "entity match is unavailable",
+                ),
+                "competitive_match_scope_mismatch": (
+                    "entity_match_id",
+                    "entity match is unavailable",
+                ),
+            }
+            if detail in known_errors:
+                field, message = known_errors[detail]
+                code = detail
+            else:
+                field = "row"
+                code = "row_invalid"
+                message = "row could not be imported"
+        return {"row": row_number, "field": field, "code": code, "message": message}
 
     def upsert_monitor(
         self,
@@ -2237,6 +2733,7 @@ class CompetitiveIntelligenceService:
             "is_estimate": bool(row["is_estimate"]),
             "observed_at": row["observed_at"],
             "source_id": row["source_id"],
+            "entity_match_id": row.get("entity_match_id"),
             "entity_match": match,
             "actionable": bool(match and match["status"] == "approved"),
         }

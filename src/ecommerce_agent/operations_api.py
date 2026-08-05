@@ -11,6 +11,7 @@ from .auth import AdminPrincipal
 from .business import (
     CatalogItemUpsert,
     CompetitiveAlertTransition,
+    CompetitiveDatasetRow,
     CompetitiveEntityMatchCreate,
     CompetitiveMatchTransition,
     CompetitiveMonitorUpsert,
@@ -493,6 +494,76 @@ def build_operations_router(
                 "score": result["score"],
                 "recommended_status": result["recommended_status"],
                 "write_status": result["write_status"],
+            },
+            admin.tenant_id,
+        )
+        return result
+
+    @router.post("/competitive/datasets")
+    def record_competitive_dataset(
+        payload: CompetitiveDatasetRow,
+        admin: AdminPrincipal = Depends(require_admin),
+    ) -> dict[str, Any]:
+        try:
+            result = service.operations.competitive.record_dataset(
+                admin.tenant_id, payload
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        service.db.audit(
+            "competitive.dataset.recorded",
+            admin.admin_id,
+            result["latest_observation"]["id"],
+            {
+                "match_id": result["match"]["id"],
+                "store_id": result["match"]["store_id"],
+                "subject_sku": result["match"]["subject_sku"],
+                "write_status": result["write_status"],
+            },
+            admin.tenant_id,
+        )
+        return result
+
+    @router.post("/competitive/datasets/import")
+    async def import_competitive_dataset(
+        request: Request,
+        connector_id: str = Query(min_length=1, max_length=128),
+        store_id: str = Query(min_length=1, max_length=128),
+        source_ref: str = Query(min_length=4, max_length=500),
+        source_type: str = Query(
+            default="file_import",
+            pattern=r"^(authorized_api|licensed_provider|manual|file_import|virtual)$",
+        ),
+        admin: AdminPrincipal = Depends(require_admin),
+    ) -> dict[str, Any]:
+        try:
+            content = (await request.body()).decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="competitive_csv_encoding_invalid",
+            ) from exc
+        try:
+            result = service.operations.competitive.import_dataset_csv(
+                admin.tenant_id,
+                content,
+                connector_id=connector_id,
+                store_id=store_id,
+                source_ref=source_ref,
+                source_type=source_type,  # type: ignore[arg-type]
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        service.db.audit(
+            "competitive.dataset.imported",
+            admin.admin_id,
+            connector_id,
+            {
+                "store_id": store_id,
+                "total_rows": result["total_rows"],
+                "imported_count": result["imported_count"],
+                "idempotent_count": result["idempotent_count"],
+                "error_count": result["error_count"],
             },
             admin.tenant_id,
         )

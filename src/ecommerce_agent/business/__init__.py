@@ -2,6 +2,7 @@ from .catalog import CatalogItemUpsert, CatalogService
 from .competitive import (
     CompetitiveAlertTransition,
     CompetitiveCustomDimension,
+    CompetitiveDatasetRow,
     CompetitiveEntityMatchCreate,
     CompetitiveIntelligenceService,
     CompetitiveMatchTransition,
@@ -40,6 +41,7 @@ __all__ = [
     "CompetitiveIntelligenceService",
     "CompetitiveAlertTransition",
     "CompetitiveCustomDimension",
+    "CompetitiveDatasetRow",
     "CompetitiveEntityMatchCreate",
     "CompetitiveMatchTransition",
     "CompetitiveMonitorUpsert",
