@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -122,6 +122,148 @@ def test_manual_dataset_record_creates_pending_match_and_observation(tmp_path) -
             ).fetchone()[0]
         assert match_count == 1
         assert observation_count == 1
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize("explicit_match", [False, True])
+def test_dataset_reuse_revalidates_f305_subject_availability(
+    tmp_path, explicit_match: bool
+) -> None:
+    service = AgentService(make_settings(tmp_path))
+    try:
+        seed_subject_catalog(service)
+        created = service.operations.competitive.record_dataset(
+            TENANT_ID, dataset_row()
+        )
+        service.operations.catalog.upsert(
+            TENANT_ID,
+            CatalogItemUpsert(
+                connector_id="catalog-feed",
+                store_id="store-a",
+                item_id="item-a",
+                sku_id="sku-a",
+                title="云湃智能客服一体机 YP-100",
+                status="deleted",
+                sale_price=Decimal("4999"),
+                currency="CNY",
+                attributes={
+                    "brand": "云湃",
+                    "model": "YP-100",
+                    "category": "智能客服一体机",
+                    "gtin": "06912345678901",
+                },
+                source_updated_at=datetime(2026, 8, 5, 2, 0, tzinfo=UTC),
+                source_id="catalog-source-a",
+            ),
+        )
+        replacement = dataset_row(
+            source_id="dataset-row-2",
+            observed_at=datetime(2026, 8, 5, 2, 0, tzinfo=UTC),
+            entity_match_id=created["match"]["id"] if explicit_match else None,
+        )
+
+        with pytest.raises(
+            ValueError, match="competitive_subject_sku_unavailable"
+        ):
+            service.operations.competitive.record_dataset(TENANT_ID, replacement)
+    finally:
+        service.close()
+
+
+def test_changed_f305_snapshot_creates_new_pending_match(tmp_path) -> None:
+    service = AgentService(make_settings(tmp_path))
+    try:
+        seed_subject_catalog(service)
+        first = service.operations.competitive.record_dataset(
+            TENANT_ID, dataset_row()
+        )
+        service.operations.catalog.upsert(
+            TENANT_ID,
+            CatalogItemUpsert(
+                connector_id="catalog-feed",
+                store_id="store-a",
+                item_id="item-a",
+                sku_id="sku-a",
+                title="云湃智能客服一体机 YP-200",
+                status="active",
+                sale_price=Decimal("5299"),
+                currency="CNY",
+                attributes={
+                    "brand": "云湃",
+                    "model": "YP-200",
+                    "category": "智能客服一体机",
+                    "gtin": "06912345678902",
+                },
+                source_updated_at=datetime(2026, 8, 5, 2, 0, tzinfo=UTC),
+                source_id="catalog-source-a",
+            ),
+        )
+
+        second = service.operations.competitive.record_dataset(
+            TENANT_ID,
+            dataset_row(
+                source_id="dataset-row-2",
+                observed_at=datetime(2026, 8, 5, 2, 0, tzinfo=UTC),
+            ),
+        )
+
+        assert second["match"]["id"] != first["match"]["id"]
+        assert second["match"]["status"] == "pending"
+        assert second["match"]["subject_identity"]["model"] == "YP-200"
+    finally:
+        service.close()
+
+
+def test_explicit_match_rejects_changed_competitor_identity(tmp_path) -> None:
+    service = AgentService(make_settings(tmp_path))
+    try:
+        seed_subject_catalog(service)
+        created = service.operations.competitive.record_dataset(
+            TENANT_ID, dataset_row()
+        )
+
+        with pytest.raises(
+            ValueError, match="competitive_match_identity_mismatch"
+        ):
+            service.operations.competitive.record_dataset(
+                TENANT_ID,
+                dataset_row(
+                    source_id="dataset-row-2",
+                    model="CP-200",
+                    entity_match_id=created["match"]["id"],
+                    observed_at=datetime(2026, 8, 5, 2, 0, tzinfo=UTC),
+                ),
+            )
+    finally:
+        service.close()
+
+
+def test_csv_does_not_mask_unexpected_service_failures(tmp_path, monkeypatch) -> None:
+    service = AgentService(make_settings(tmp_path))
+    csv_text = """source_id,subject_sku,competitor_name,competitor_sku,product_title,subject_price,competitor_price,currency,observed_at
+unexpected,sku-a,竞店,comp-a,竞品,4999,4599,CNY,2026-08-05T01:00:00+00:00
+"""
+    try:
+        seed_subject_catalog(service)
+
+        def fail_unexpectedly(*args, **kwargs):
+            raise RuntimeError("database connection lost")
+
+        monkeypatch.setattr(
+            service.operations.competitive,
+            "record_dataset",
+            fail_unexpectedly,
+        )
+
+        with pytest.raises(RuntimeError, match="database connection lost"):
+            service.operations.competitive.import_dataset_csv(
+                TENANT_ID,
+                csv_text,
+                connector_id="file-m6",
+                store_id="store-a",
+                source_ref="file://unexpected.csv",
+            )
     finally:
         service.close()
 

@@ -1205,6 +1205,17 @@ class CompetitiveIntelligenceService:
         )
         with self.db._write_lock, self.db.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            subject_identity = self._f305_subject_identity(
+                conn,
+                tenant_id=tenant_id,
+                store_id=value.store_id,
+                subject_sku=value.subject_sku,
+            )
+            subject_identity_json = json.dumps(
+                subject_identity.model_dump(mode="json"),
+                ensure_ascii=False,
+                sort_keys=True,
+            )
             if value.entity_match_id:
                 match_row = conn.execute(
                     "SELECT * FROM competitive_entity_matches WHERE id=? AND tenant_id=?",
@@ -1212,6 +1223,16 @@ class CompetitiveIntelligenceService:
                 ).fetchone()
                 if match_row is None:
                     raise ValueError("competitive_match_not_found")
+                if (
+                    str(match_row["store_id"]) != value.store_id
+                    or str(match_row["subject_sku"]) != value.subject_sku
+                    or str(match_row["competitor_sku"]) != value.competitor_sku
+                ):
+                    raise ValueError("competitive_match_scope_mismatch")
+                if str(match_row["subject_identity_json"]) != subject_identity_json:
+                    raise ValueError("competitive_match_subject_changed")
+                if str(match_row["competitor_identity_json"]) != identity_json:
+                    raise ValueError("competitive_match_identity_mismatch")
                 match_result = self._match_view(dict(match_row))
             else:
                 match_row = conn.execute(
@@ -1219,6 +1240,7 @@ class CompetitiveIntelligenceService:
                     SELECT * FROM competitive_entity_matches
                     WHERE tenant_id=? AND store_id=? AND subject_sku=?
                       AND competitor_name=? AND competitor_sku=?
+                      AND subject_identity_json=?
                       AND competitor_identity_json=?
                       AND status IN ('pending', 'approved')
                     ORDER BY CASE status WHEN 'approved' THEN 0 ELSE 1 END,
@@ -1231,6 +1253,7 @@ class CompetitiveIntelligenceService:
                         value.subject_sku,
                         value.competitor_name,
                         value.competitor_sku,
+                        subject_identity_json,
                         identity_json,
                     ),
                 ).fetchone()
@@ -1244,6 +1267,7 @@ class CompetitiveIntelligenceService:
                         "subject_sku": value.subject_sku,
                         "competitor_name": value.competitor_name,
                         "competitor_sku": value.competitor_sku,
+                        "subject_identity": subject_identity.model_dump(mode="json"),
                         "competitor_identity": competitor_identity.model_dump(mode="json"),
                     }
                     match_result = self._record_entity_match_in_conn(
@@ -1255,9 +1279,7 @@ class CompetitiveIntelligenceService:
                             subject_sku=value.subject_sku,
                             competitor_name=value.competitor_name,
                             competitor_sku=value.competitor_sku,
-                            subject_identity=CompetitiveProductIdentity(
-                                title="F-305 subject snapshot"
-                            ),
+                            subject_identity=subject_identity,
                             competitor_identity=competitor_identity,
                             comparison_keys=value.comparison_keys,
                             source_type=value.source_type,
@@ -1369,14 +1391,22 @@ class CompetitiveIntelligenceService:
         with self.db.connect() as conn:
             rows = conn.execute(
                 f"""
-                WITH ranked AS (
+                WITH source_ranked AS (
+                    SELECT o.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY o.connector_id, o.source_id
+                               ORDER BY o.observed_at DESC, o.created_at DESC, o.id DESC
+                           ) AS source_version_rank
+                    FROM competitor_observations o
+                    WHERE o.tenant_id=? AND o.entity_match_id IS NOT NULL
+                ), ranked AS (
                     SELECT o.*,
                            ROW_NUMBER() OVER (
                                PARTITION BY o.entity_match_id
                                ORDER BY o.observed_at DESC, o.created_at DESC, o.id DESC
                            ) AS observation_rank
-                    FROM competitor_observations o
-                    WHERE o.tenant_id=? AND o.entity_match_id IS NOT NULL
+                    FROM source_ranked o
+                    WHERE o.source_version_rank=1
                 )
                 SELECT o.*, m.competitor_identity_json, m.status AS match_status
                 FROM ranked o
@@ -1689,14 +1719,20 @@ class CompetitiveIntelligenceService:
                     "entity_match_id",
                     "entity match is unavailable",
                 ),
+                "competitive_match_subject_changed": (
+                    "subject_sku",
+                    "subject SKU facts changed and require a new match decision",
+                ),
+                "competitive_match_identity_mismatch": (
+                    "entity_match_id",
+                    "entity match identity does not match the imported row",
+                ),
             }
             if detail in known_errors:
                 field, message = known_errors[detail]
                 code = detail
             else:
-                field = "row"
-                code = "row_invalid"
-                message = "row could not be imported"
+                raise exc
         return {"row": row_number, "field": field, "code": code, "message": message}
 
     def upsert_monitor(

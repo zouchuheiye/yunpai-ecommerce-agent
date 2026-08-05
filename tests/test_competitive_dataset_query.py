@@ -254,6 +254,42 @@ def test_latest_observation_uses_created_at_for_equal_source_times(tmp_path) -> 
         service.close()
 
 
+def test_new_source_version_supersedes_old_approved_match(tmp_path) -> None:
+    service = AgentService(make_settings(tmp_path))
+    try:
+        seed_catalog(service)
+        first = service.operations.competitive.record_dataset(
+            TENANT_ID,
+            row("versioned-source", "comp-versioned", model="YP-100"),
+        )
+        approve(service, first["match"]["id"])
+        latest = service.operations.competitive.record_dataset(
+            TENANT_ID,
+            row(
+                "versioned-source",
+                "comp-versioned",
+                model="YP-200",
+                product_title="竞品新型号 YP-200",
+                competitor_price=Decimal("4200"),
+                observed_at=OBSERVED_AT + timedelta(hours=1),
+            ),
+        )
+
+        management = service.operations.competitive.query_datasets(
+            TENANT_ID, CompetitiveDatasetQuery(subject_sku="sku-a")
+        )
+        analysis = service.operations.competitive.query_actionable_datasets(
+            TENANT_ID, CompetitiveDatasetQuery(subject_sku="sku-a")
+        )
+
+        assert latest["match"]["status"] == "pending"
+        assert management["count"] == 1
+        assert management["items"][0]["match"]["id"] == latest["match"]["id"]
+        assert analysis == {"count": 0, "items": []}
+    finally:
+        service.close()
+
+
 def test_query_requires_currency_for_price_ranges_and_valid_bounds() -> None:
     with pytest.raises(ValidationError, match="currency is required"):
         CompetitiveDatasetQuery(competitor_price_min=Decimal("100"))
