@@ -149,6 +149,11 @@
     .copy-result-card h4 { margin: 0 0 6px; font-size: 13px; }
     .copy-result-card p { margin: 0; white-space: pre-wrap; }
     .copy-result-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .competitive-dimension-row { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(110px, 1fr) 120px minmax(130px, 1.2fr) 90px 34px; gap: 8px; align-items: end; }
+    .competitive-dimension-row + .competitive-dimension-row { margin-top: 8px; }
+    #competitiveImportForm { grid-template-columns: minmax(0, 1fr); }
+    .competitive-dataset-table { min-width: 1180px; }
+    .competitive-import-errors { max-height: 240px; }
     .simulation-layout { display: grid; grid-template-columns: minmax(430px, .9fr) minmax(0, 1.1fr); gap: 14px; align-items: start; }
     #view-simulation table { min-width: 0; table-layout: fixed; }
     #view-simulation th:nth-child(1) { width: 44%; }
@@ -203,6 +208,7 @@
       .module-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .conversation-layout { grid-template-columns: 320px minmax(0, 1fr); }
       .simulation-layout { grid-template-columns: 1fr; }
+      .competitive-dimension-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     }
     @media (max-width: 760px) {
       .shell { display: block; }
@@ -221,6 +227,7 @@
       .conversation-list { border-right: 0; border-bottom: 1px solid var(--line); max-height: 300px; overflow: auto; }
       .table-wrap { max-height: 440px; }
       .message { max-width: 90%; }
+      .competitive-dimension-row { grid-template-columns: 1fr 1fr; }
     }
     @media (max-width: 460px) {
       .grid.kpis, .module-grid { grid-template-columns: 1fr; }
@@ -233,6 +240,7 @@
       .toolbar .input:not(textarea) { width: 100%; }
       .form-grid { grid-template-columns: 1fr; }
       .form-grid .wide { grid-column: auto; }
+      .competitive-dimension-row { grid-template-columns: 1fr; }
       .evidence-grid { grid-template-columns: minmax(0, 1fr); }
       .queue-assignment-row { grid-template-columns: minmax(0, 1fr) 76px 66px; gap: 6px; }
     }
@@ -364,6 +372,74 @@
         <section class="view" id="view-competitive">
           <div class="section-head"><div><h2>竞品分析</h2><p>同款实体先裁决，价格、卖点和聚合口碑再进入 Agent 分析</p></div><div class="toolbar"><button class="button" id="syncCompetitive">同步虚拟样本</button><button class="button" id="evaluateCompetitive">执行监控</button><input class="input" id="skuInput" value="YP-SKU-001" placeholder="输入本店 SKU"><button class="button primary" id="analyzeSku">分析</button></div></div>
           <div class="grid kpis" id="competitiveKpis"></div>
+          <div class="grid two" style="margin-top:14px">
+            <article class="panel">
+              <div class="panel-head"><h3>手动录入竞品数据</h3><span class="status warn">录入后待裁决</span></div>
+              <form class="panel-body form-grid" id="competitiveDatasetForm">
+                <div class="field"><label for="competitiveDatasetConnector">连接器</label><input class="input" id="competitiveDatasetConnector" value="manual-admin" required></div>
+                <div class="field"><label for="competitiveDatasetStore">店铺</label><input class="input" id="competitiveDatasetStore" value="virtual-shop-001" required></div>
+                <div class="field"><label for="competitiveDatasetSourceId">来源记录 ID</label><input class="input" id="competitiveDatasetSourceId" required></div>
+                <div class="field wide"><label for="competitiveDatasetSourceRef">来源引用</label><input class="input" id="competitiveDatasetSourceRef" value="manual://admin/competitive" required></div>
+                <div class="field"><label for="competitiveDatasetSubjectSku">本店 SKU</label><input class="input" id="competitiveDatasetSubjectSku" value="YP-SKU-001" required></div>
+                <div class="field"><label for="competitiveDatasetCompetitorName">竞品名称</label><input class="input" id="competitiveDatasetCompetitorName" required></div>
+                <div class="field"><label for="competitiveDatasetCompetitorSku">竞品 SKU</label><input class="input" id="competitiveDatasetCompetitorSku" required></div>
+                <div class="field wide"><label for="competitiveDatasetTitle">竞品商品名称</label><input class="input" id="competitiveDatasetTitle" required></div>
+                <div class="field"><label for="competitiveDatasetBrand">品牌</label><input class="input" id="competitiveDatasetBrand"></div>
+                <div class="field"><label for="competitiveDatasetModel">型号</label><input class="input" id="competitiveDatasetModel"></div>
+                <div class="field"><label for="competitiveDatasetCategory">品类</label><input class="input" id="competitiveDatasetCategory"></div>
+                <div class="field"><label for="competitiveDatasetGtin">GTIN</label><input class="input" id="competitiveDatasetGtin" inputmode="numeric"></div>
+                <div class="field"><label for="competitiveDatasetSubjectPrice">本店价格</label><input class="input" id="competitiveDatasetSubjectPrice" type="number" min="0.01" step="0.01" required></div>
+                <div class="field"><label for="competitiveDatasetCompetitorPrice">竞品价格</label><input class="input" id="competitiveDatasetCompetitorPrice" type="number" min="0.01" step="0.01" required></div>
+                <div class="field"><label for="competitiveDatasetCurrency">币种</label><input class="input" id="competitiveDatasetCurrency" value="CNY" minlength="3" maxlength="3" required></div>
+                <div class="field"><label for="competitiveDatasetRatingValue">原始评分</label><input class="input" id="competitiveDatasetRatingValue" type="number" min="0" step="0.01"></div>
+                <div class="field"><label for="competitiveDatasetRatingScale">评分满分</label><input class="input" id="competitiveDatasetRatingScale" type="number" min="0.01" step="0.01"></div>
+                <div class="field"><label for="competitiveDatasetSalesRank">销量排名</label><input class="input" id="competitiveDatasetSalesRank" type="number" min="1" step="1"></div>
+                <div class="field"><label for="competitiveDatasetRankScope">排名范围</label><input class="input" id="competitiveDatasetRankScope"></div>
+                <div class="field"><label for="competitiveDatasetObservedAt">观察时间</label><input class="input" id="competitiveDatasetObservedAt" type="datetime-local" required></div>
+                <div class="field"><label><input id="competitiveDatasetEstimate" type="checkbox"> 估算数据</label></div>
+                <div class="wide">
+                  <div class="panel-head" style="padding-left:0;padding-right:0"><h3>自定义维度</h3><button class="button small" type="button" id="addCompetitiveDimension">添加维度</button></div>
+                  <div id="competitiveDimensionRows"></div>
+                </div>
+                <div class="wide"><button class="button primary" type="submit" id="saveCompetitiveDataset">保存竞品数据</button></div>
+              </form>
+            </article>
+            <article class="panel">
+              <div class="panel-head"><h3>CSV 批量导入</h3><span class="status info">UTF-8 / BOM · 最多 2,000 行</span></div>
+              <form class="panel-body form-grid" id="competitiveImportForm">
+                <div class="field wide"><label for="competitiveDatasetFile">CSV 文件</label><input class="input" id="competitiveDatasetFile" type="file" accept=".csv,text/csv" required></div>
+                <div class="field"><label for="competitiveImportConnector">连接器</label><input class="input" id="competitiveImportConnector" value="file-m6" required></div>
+                <div class="field"><label for="competitiveImportStore">店铺</label><input class="input" id="competitiveImportStore" value="virtual-shop-001" required></div>
+                <div class="field"><label for="competitiveImportSourceRef">来源引用</label><input class="input" id="competitiveImportSourceRef" value="file://competitive.csv" required></div>
+                <div class="wide"><button class="button primary" type="submit" id="importCompetitiveDataset">导入 CSV</button></div>
+              </form>
+              <div class="panel-body" style="padding-top:0"><div class="notice" id="competitiveImportSummary">异常行会跳过，有效行独立提交。</div></div>
+              <div class="table-wrap competitive-import-errors"><table><thead><tr><th>数据行</th><th>字段</th><th>错误码</th><th>说明</th></tr></thead><tbody id="competitiveImportErrors"><tr><td colspan="4"><div class="empty">暂无导入错误</div></td></tr></tbody></table></div>
+            </article>
+          </div>
+          <article class="panel" style="margin-top:14px">
+            <div class="panel-head"><div><h3>竞品数据组合筛选</h3><span class="muted">管理查询可查看各裁决状态，分析入口仍固定为已批准</span></div></div>
+            <form class="panel-body form-grid" id="competitiveDatasetQueryForm">
+              <div class="field"><label for="competitiveQueryStore">店铺</label><input class="input" id="competitiveQueryStore" value="virtual-shop-001"></div>
+              <div class="field"><label for="competitiveQuerySubjectSku">本店 SKU</label><input class="input" id="competitiveQuerySubjectSku"></div>
+              <div class="field"><label for="competitiveQueryStatus">裁决状态</label><select class="input" id="competitiveQueryStatus"><option value="">全部状态</option><option value="pending">待裁决</option><option value="approved">已批准</option><option value="rejected">已拒绝</option></select></div>
+              <div class="field"><label for="competitiveQueryCategory">品类</label><input class="input" id="competitiveQueryCategory"></div>
+              <div class="field"><label for="competitiveQueryBrand">品牌</label><input class="input" id="competitiveQueryBrand"></div>
+              <div class="field"><label for="competitiveQueryCurrency">币种</label><input class="input" id="competitiveQueryCurrency" value="CNY" minlength="3" maxlength="3"></div>
+              <div class="field"><label for="competitiveQueryPriceMin">最低竞品价</label><input class="input" id="competitiveQueryPriceMin" type="number" min="0" step="0.01"></div>
+              <div class="field"><label for="competitiveQueryPriceMax">最高竞品价</label><input class="input" id="competitiveQueryPriceMax" type="number" min="0" step="0.01"></div>
+              <div class="field"><label for="competitiveQueryRatingMin">最低五星评分</label><input class="input" id="competitiveQueryRatingMin" type="number" min="0" max="5" step="0.01"></div>
+              <div class="field"><label for="competitiveQueryRatingMax">最高五星评分</label><input class="input" id="competitiveQueryRatingMax" type="number" min="0" max="5" step="0.01"></div>
+              <div class="field"><label for="competitiveQueryRankMin">最低排名值</label><input class="input" id="competitiveQueryRankMin" type="number" min="1" step="1"></div>
+              <div class="field"><label for="competitiveQueryRankMax">最高排名值</label><input class="input" id="competitiveQueryRankMax" type="number" min="1" step="1"></div>
+              <div class="field"><label for="competitiveQueryDimensionKey">维度键</label><input class="input" id="competitiveQueryDimensionKey"></div>
+              <div class="field"><label for="competitiveQueryDimensionType">维度类型</label><select class="input" id="competitiveQueryDimensionType"><option value="text">文本</option><option value="number">数值</option><option value="boolean">布尔</option></select></div>
+              <div class="field"><label for="competitiveQueryDimensionValue">维度值</label><input class="input" id="competitiveQueryDimensionValue"></div>
+              <div class="wide"><button class="button primary" type="submit" id="queryCompetitiveDatasets">查询竞品数据</button></div>
+            </form>
+            <div class="panel-head"><h3>筛选结果</h3><span class="muted" id="competitiveDatasetCount">0 条</span></div>
+            <div class="table-wrap"><table class="competitive-dataset-table"><thead><tr><th>竞品身份</th><th>价格</th><th>评分</th><th>销量排名</th><th>自定义维度</th><th>裁决状态</th><th>来源 / 时间</th><th>操作</th></tr></thead><tbody id="competitiveDatasetRows"><tr><td colspan="8"><div class="empty">提交筛选条件后查看竞品数据</div></td></tr></tbody></table></div>
+          </article>
           <article class="panel" style="margin-top:14px">
             <div class="panel-head"><div><h3>同款匹配质量队列</h3><span class="muted">分数只提供解释，批准必须由运营人员完成</span></div><div class="toolbar"><select class="input" id="competitiveMatchStatus"><option value="">全部状态</option><option value="pending" selected>待裁决</option><option value="approved">已批准</option><option value="rejected">已拒绝</option></select><button class="button" id="refreshCompetitiveMatches">刷新队列</button></div></div>
             <div class="table-wrap"><table><thead><tr><th>状态</th><th>本店 / 竞品</th><th>匹配解释</th><th>关键问题</th><th>来源</th><th>操作</th></tr></thead><tbody id="competitiveMatchRows"></tbody></table></div>
@@ -1423,6 +1499,151 @@
       } catch (error) { $('handoffHistoryBody').innerHTML = `<div class="notice">${escapeHtml(error.message)}</div>`; }
     }
 
+    function renderCompetitiveMatchActions(item) {
+      const issues = [
+        ...(item.conflicts || []).map((conflict) => `${conflict.field}: ${conflict.subject} ≠ ${conflict.competitor}`),
+        ...((item.missing_fields || []).length ? [`缺失: ${item.missing_fields.join(', ')}`] : [])
+      ];
+      const attributes = `data-competitive-match="${escapeHtml(item.id)}" data-match-version="${item.record_version}" data-match-label="${escapeHtml(item.subject_sku)} ↔ ${escapeHtml(item.competitor_sku)}" data-match-recommendation="${escapeHtml(item.recommended_status)}" data-match-score="${item.score}" data-match-issues="${escapeHtml(issues.join('；'))}"`;
+      const actions = [];
+      if (item.status !== 'approved' && item.recommended_status === 'approved') actions.push(`<button class="button small primary" ${attributes} data-match-action="approved">批准</button>`);
+      if (item.status !== 'rejected') actions.push(`<button class="button small" ${attributes} data-match-action="rejected">拒绝</button>`);
+      return actions.join(' ') || '-';
+    }
+
+    function bindCompetitiveMatchActions() {
+      document.querySelectorAll('[data-competitive-match]').forEach((node) => node.addEventListener('click', () => openCompetitiveMatchDialog(node)));
+    }
+
+    function competitiveMatchIssues(item) {
+      return [
+        ...(item.conflicts || []).map((conflict) => `${conflict.field}: ${conflict.subject} ≠ ${conflict.competitor}`),
+        ...((item.missing_fields || []).length ? [`缺失: ${item.missing_fields.join(', ')}`] : [])
+      ];
+    }
+
+    function addCompetitiveDimensionRow(value = {}) {
+      const row = document.createElement('div');
+      row.className = 'competitive-dimension-row';
+      row.innerHTML = `<div class="field"><label>维度键</label><input class="input" data-dimension-key value="${escapeHtml(value.key || '')}" required></div><div class="field"><label>显示名</label><input class="input" data-dimension-label value="${escapeHtml(value.label || '')}" required></div><div class="field"><label>类型</label><select class="input" data-dimension-type><option value="text">文本</option><option value="number">数值</option><option value="boolean">布尔</option></select></div><div class="field"><label>值</label><input class="input" data-dimension-value value="${escapeHtml(value.value ?? '')}" required></div><div class="field"><label>单位</label><input class="input" data-dimension-unit value="${escapeHtml(value.unit || '')}"></div><button class="icon-button" type="button" data-remove-dimension title="移除维度" aria-label="移除维度">×</button>`;
+      row.querySelector('[data-dimension-type]').value = value.value_type || 'text';
+      row.querySelector('[data-remove-dimension]').addEventListener('click', () => row.remove());
+      $('competitiveDimensionRows').appendChild(row);
+    }
+
+    function collectCompetitiveDimensions() {
+      return Array.from(document.querySelectorAll('.competitive-dimension-row')).map((row) => {
+        const key = row.querySelector('[data-dimension-key]').value.trim();
+        const label = row.querySelector('[data-dimension-label]').value.trim();
+        const valueType = row.querySelector('[data-dimension-type]').value;
+        const rawValue = row.querySelector('[data-dimension-value]').value.trim();
+        const unit = row.querySelector('[data-dimension-unit]').value.trim();
+        const dimension = { key, label, value_type:valueType, value_text:null, value_number:null, value_boolean:null, unit:null };
+        if (valueType === 'text') dimension.value_text = rawValue;
+        if (valueType === 'number') { dimension.value_number = rawValue; dimension.unit = unit || null; }
+        if (valueType === 'boolean') {
+          if (!['true','false'].includes(rawValue.toLowerCase())) throw new Error('布尔维度值必须是 true 或 false');
+          dimension.value_boolean = rawValue.toLowerCase() === 'true';
+        }
+        return dimension;
+      });
+    }
+
+    function optionalInput(id) {
+      const value = $(id).value.trim();
+      return value || null;
+    }
+
+    function competitiveDatasetPayload() {
+      const ratingValue = optionalInput('competitiveDatasetRatingValue');
+      const ratingScale = optionalInput('competitiveDatasetRatingScale');
+      const salesRank = optionalInput('competitiveDatasetSalesRank');
+      const rankScope = optionalInput('competitiveDatasetRankScope');
+      if (Boolean(ratingValue) !== Boolean(ratingScale)) throw new Error('原始评分和评分满分必须同时填写');
+      if (Boolean(salesRank) !== Boolean(rankScope)) throw new Error('销量排名和排名范围必须同时填写');
+      return {
+        connector_id:$('competitiveDatasetConnector').value.trim(),
+        store_id:$('competitiveDatasetStore').value.trim(),
+        source_ref:$('competitiveDatasetSourceRef').value.trim(),
+        source_type:'manual',
+        source_id:$('competitiveDatasetSourceId').value.trim(),
+        subject_sku:$('competitiveDatasetSubjectSku').value.trim(),
+        competitor_name:$('competitiveDatasetCompetitorName').value.trim(),
+        competitor_sku:$('competitiveDatasetCompetitorSku').value.trim(),
+        product_title:$('competitiveDatasetTitle').value.trim(),
+        brand:optionalInput('competitiveDatasetBrand'),
+        model:optionalInput('competitiveDatasetModel'),
+        category:optionalInput('competitiveDatasetCategory'),
+        gtin:optionalInput('competitiveDatasetGtin'),
+        attributes:{},
+        custom_dimensions:collectCompetitiveDimensions(),
+        comparison_keys:[],
+        subject_price:$('competitiveDatasetSubjectPrice').value,
+        competitor_price:$('competitiveDatasetCompetitorPrice').value,
+        currency:$('competitiveDatasetCurrency').value.trim().toUpperCase(),
+        rating_value:ratingValue,
+        rating_scale:ratingScale,
+        sales_rank:salesRank ? Number(salesRank) : null,
+        rank_scope:rankScope,
+        is_estimate:$('competitiveDatasetEstimate').checked,
+        observed_at:new Date($('competitiveDatasetObservedAt').value).toISOString(),
+        entity_match_id:null
+      };
+    }
+
+    function competitiveQueryPayload() {
+      const payload = { custom_dimensions:[], limit:200 };
+      const textFields = {
+        store_id:'competitiveQueryStore', subject_sku:'competitiveQuerySubjectSku',
+        status:'competitiveQueryStatus', category:'competitiveQueryCategory',
+        brand:'competitiveQueryBrand', currency:'competitiveQueryCurrency'
+      };
+      Object.entries(textFields).forEach(([key,id]) => { const value = $(id).value.trim(); if (value) payload[key] = key === 'currency' ? value.toUpperCase() : value; });
+      const numericFields = {
+        competitor_price_min:'competitiveQueryPriceMin', competitor_price_max:'competitiveQueryPriceMax',
+        rating_min:'competitiveQueryRatingMin', rating_max:'competitiveQueryRatingMax',
+        sales_rank_min:'competitiveQueryRankMin', sales_rank_max:'competitiveQueryRankMax'
+      };
+      Object.entries(numericFields).forEach(([key,id]) => { const value = $(id).value.trim(); if (value) payload[key] = value; });
+      const dimensionKey = $('competitiveQueryDimensionKey').value.trim();
+      const dimensionValue = $('competitiveQueryDimensionValue').value.trim();
+      if (dimensionKey || dimensionValue) {
+        if (!dimensionKey || !dimensionValue) throw new Error('自定义维度键和值必须同时填写');
+        const valueType = $('competitiveQueryDimensionType').value;
+        const dimension = { key:dimensionKey, value_type:valueType, value_text:null, value_number:null, value_boolean:null };
+        if (valueType === 'text') dimension.value_text = dimensionValue;
+        if (valueType === 'number') dimension.value_number = dimensionValue;
+        if (valueType === 'boolean') {
+          if (!['true','false'].includes(dimensionValue.toLowerCase())) throw new Error('布尔筛选值必须是 true 或 false');
+          dimension.value_boolean = dimensionValue.toLowerCase() === 'true';
+        }
+        payload.custom_dimensions.push(dimension);
+      }
+      return payload;
+    }
+
+    function competitiveDimensionSummary(dimensions) {
+      if (!dimensions?.length) return '-';
+      return dimensions.map((item) => {
+        const value = item.value_type === 'text' ? item.value_text : item.value_type === 'number' ? `${item.value_number}${item.unit ? ` ${item.unit}` : ''}` : item.value_boolean ? 'true' : 'false';
+        return `<div><span class="mono">${escapeHtml(item.key)}</span> · ${escapeHtml(value)}</div>`;
+      }).join('');
+    }
+
+    async function queryCompetitiveDatasets() {
+      const result = await api('/v1/competitive/datasets/query', { method:'POST', body:JSON.stringify(competitiveQueryPayload()) });
+      $('competitiveDatasetCount').textContent = `${result.count} 条`;
+      $('competitiveDatasetRows').innerHTML = result.items.length ? result.items.map((item) => {
+        const observation = item.latest_observation;
+        const identity = item.identity;
+        const rating = observation.rating_value === null ? '-' : `${escapeHtml(observation.rating_value)} / ${escapeHtml(observation.rating_scale)}<div class="muted">五星 ${escapeHtml(observation.normalized_rating)}</div>`;
+        const rank = observation.sales_rank === null ? '-' : `${observation.sales_rank}<div class="muted">${escapeHtml(observation.rank_scope)}</div>`;
+        return `<tr><td><strong>${escapeHtml(identity.title)}</strong><div>${escapeHtml(identity.brand || '-')} · ${escapeHtml(identity.model || '-')}</div><div class="muted">${escapeHtml(identity.category || '-')} · ${escapeHtml(item.match.competitor_sku)}</div></td><td>${escapeHtml(observation.subject_price)} / <strong>${escapeHtml(observation.competitor_price)}</strong> ${escapeHtml(observation.currency)}</td><td>${rating}</td><td>${rank}</td><td>${competitiveDimensionSummary(identity.custom_dimensions)}</td><td><span class="status ${statusClass(item.match.status)}">${escapeHtml(item.match.status)}</span><div class="muted">锁 ${item.match.record_version}</div></td><td>${escapeHtml(observation.source_type)}${observation.is_estimate ? ' · 估算' : ''}<div class="muted">${formatTime(observation.observed_at)}</div></td><td>${renderCompetitiveMatchActions(item.match)}</td></tr>`;
+      }).join('') : '<tr><td colspan="8"><div class="empty">当前条件下没有竞品数据</div></td></tr>';
+      bindCompetitiveMatchActions();
+      return result;
+    }
+
     async function loadCompetitive() {
       const matchStatus = $('competitiveMatchStatus').value;
       const matchSuffix = matchStatus ? `?status=${encodeURIComponent(matchStatus)}&limit=200` : '?limit=200';
@@ -1442,16 +1663,10 @@
         ['有效内容证据', quality.signals.eligible, `${quality.signals.review_summaries} 条口碑摘要`]
       ].map(([label,value,meta]) => `<div class="kpi"><span class="label">${label}</span><span class="value">${value}</span><span class="meta">${meta}</span></div>`).join('');
       $('competitiveMatchRows').innerHTML = matches.length ? matches.map((item) => {
-        const issues = [
-          ...item.conflicts.map((conflict) => `${conflict.field}: ${conflict.subject} ≠ ${conflict.competitor}`),
-          ...(item.missing_fields.length ? [`缺失: ${item.missing_fields.join(', ')}`] : [])
-        ];
-        const actions = [];
-        if (item.status !== 'approved' && item.recommended_status === 'approved') actions.push(`<button class="button small primary" data-competitive-match="${escapeHtml(item.id)}" data-match-action="approved" data-match-version="${item.record_version}" data-match-label="${escapeHtml(item.subject_sku)} ↔ ${escapeHtml(item.competitor_sku)}" data-match-recommendation="${escapeHtml(item.recommended_status)}" data-match-score="${item.score}" data-match-issues="${escapeHtml(issues.join('；'))}">批准</button>`);
-        if (item.status !== 'rejected') actions.push(`<button class="button small" data-competitive-match="${escapeHtml(item.id)}" data-match-action="rejected" data-match-version="${item.record_version}" data-match-label="${escapeHtml(item.subject_sku)} ↔ ${escapeHtml(item.competitor_sku)}" data-match-recommendation="${escapeHtml(item.recommended_status)}" data-match-score="${item.score}" data-match-issues="${escapeHtml(issues.join('；'))}">拒绝</button>`);
-        return `<tr><td><span class="status ${statusClass(item.status)}">${escapeHtml(item.status)}</span><div class="muted">建议 ${escapeHtml(item.recommended_status)} · 锁 ${item.record_version}</div></td><td><strong>${escapeHtml(item.subject_sku)}</strong><div>${escapeHtml(item.subject_identity.title)}</div><div class="muted">↔ ${escapeHtml(item.competitor_name)} · ${escapeHtml(item.competitor_sku)}</div><div class="muted">${escapeHtml(item.competitor_identity.title)}</div></td><td><strong>${item.score} / 100</strong><div class="muted">${item.matched_fields.map((field) => escapeHtml(field.field)).join(' · ') || '无匹配字段'}</div></td><td>${issues.length ? issues.map((issue) => `<div class="muted">${escapeHtml(issue)}</div>`).join('') : '<span class="status ok">无硬冲突</span>'}</td><td>${escapeHtml(item.source_type)}${item.is_estimate ? ' · 估算' : ''}<div class="muted">${formatTime(item.observed_at)}</div></td><td>${actions.join(' ') || '-'}</td></tr>`;
+        const issues = competitiveMatchIssues(item);
+        return `<tr><td><span class="status ${statusClass(item.status)}">${escapeHtml(item.status)}</span><div class="muted">建议 ${escapeHtml(item.recommended_status)} · 锁 ${item.record_version}</div></td><td><strong>${escapeHtml(item.subject_sku)}</strong><div>${escapeHtml(item.subject_identity.title)}</div><div class="muted">↔ ${escapeHtml(item.competitor_name)} · ${escapeHtml(item.competitor_sku)}</div><div class="muted">${escapeHtml(item.competitor_identity.title)}</div></td><td><strong>${item.score} / 100</strong><div class="muted">${item.matched_fields.map((field) => escapeHtml(field.field)).join(' · ') || '无匹配字段'}</div></td><td>${issues.length ? issues.map((issue) => `<div class="muted">${escapeHtml(issue)}</div>`).join('') : '<span class="status ok">无硬冲突</span>'}</td><td>${escapeHtml(item.source_type)}${item.is_estimate ? ' · 估算' : ''}<div class="muted">${formatTime(item.observed_at)}</div></td><td>${renderCompetitiveMatchActions(item)}</td></tr>`;
       }).join('') : '<tr><td colspan="6"><div class="empty">当前筛选下没有匹配候选</div></td></tr>';
-      document.querySelectorAll('[data-competitive-match]').forEach((node) => node.addEventListener('click', () => openCompetitiveMatchDialog(node)));
+      bindCompetitiveMatchActions();
       $('competitiveSignalCount').textContent = `${quality.signals.eligible} 条有效 / ${quality.signals.total} 条累计`;
       $('competitiveSignalRows').innerHTML = signals.length ? signals.map((item) => `<tr><td><span class="status info">${item.entity_role === 'subject' ? '本店' : '竞品'}</span><div>${escapeHtml(item.competitor_name)}</div></td><td><strong>${item.signal_type === 'review_summary' ? '口碑摘要' : '商品卖点'}</strong><div class="muted">${escapeHtml(item.aspect)}</div></td><td>${escapeHtml(item.summary)}</td><td>${item.signal_type === 'review_summary' ? `${item.sample_size} 条<div class="muted">正向 ${item.positive_count ?? 0} · 负向 ${item.negative_count ?? 0}</div>` : '-'}</td><td><span class="status ${statusClass(item.match_status)}">${escapeHtml(item.match_status)}</span><div class="muted">匹配 ${item.match_score} 分</div></td><td>${escapeHtml(item.source_type)}${item.is_estimate ? ' · 估算' : ''}<div class="muted">${formatTime(item.observed_at)}</div></td></tr>`).join('') : '<tr><td colspan="6"><div class="empty">暂无商品卖点或聚合口碑证据</div></td></tr>';
       const targetStore = $('monitorStore').value.trim();
@@ -1481,6 +1696,7 @@
         return `<tr><td><span class="status ${['critical','high'].includes(item.severity) ? 'bad' : item.severity === 'attention' ? 'warn' : 'info'}">${escapeHtml(item.severity)}</span></td><td><strong>${escapeHtml(item.subject_sku)}</strong><div>${escapeHtml(item.competitor_name)}</div></td><td>${escapeHtml(conditionLabels[item.alert_code] || item.alert_code)}<div class="muted">${escapeHtml(item.value)} / ${escapeHtml(item.threshold_value)}</div></td><td><span class="status ${statusClass(item.status)}">${escapeHtml(item.status)}</span><div class="muted">发生 ${item.occurrence_count} 次 · 锁 ${item.record_version}</div></td><td class="mono">${escapeHtml(item.observation_id || '无合格观察')}<div class="muted">${formatTime(item.last_detected_at)}</div></td><td>${actions.join(' ') || '-'}</td></tr>`;
       }).join('') : '<tr><td colspan="6"><div class="empty">暂无持久告警</div></td></tr>';
       document.querySelectorAll('[data-competitive-alert]').forEach((node) => node.addEventListener('click', () => openCompetitiveAlertDialog(node)));
+      await queryCompetitiveDatasets();
       await analyzeSku();
     }
 
@@ -2392,6 +2608,50 @@
     $('analyzeSku').addEventListener('click', () => analyzeSku().catch((error) => toast(error.message)));
     $('refreshCompetitiveMatches').addEventListener('click', () => loadCompetitive().catch((error) => toast(error.message)));
     $('competitiveMatchStatus').addEventListener('change', () => loadCompetitive().catch((error) => toast(error.message)));
+    $('addCompetitiveDimension').addEventListener('click', () => addCompetitiveDimensionRow());
+    $('competitiveDatasetQueryForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      try { await queryCompetitiveDatasets(); } catch (error) { toast(error.message); }
+    });
+    $('competitiveDatasetForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = $('saveCompetitiveDataset');
+      button.disabled = true;
+      try {
+        const result = await api('/v1/competitive/datasets', { method:'POST', body:JSON.stringify(competitiveDatasetPayload()) });
+        $('competitiveQueryStore').value = result.match.store_id;
+        $('competitiveQuerySubjectSku').value = result.match.subject_sku;
+        toast(result.write_status === 'idempotent' ? '该来源版本已存在' : '竞品数据已保存并进入待裁决队列');
+        await loadCompetitive();
+      } catch (error) { toast(error.message); }
+      finally { button.disabled = false; }
+    });
+    $('competitiveImportForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const file = $('competitiveDatasetFile').files?.[0];
+      if (!file) return toast('请选择 CSV 文件');
+      const button = $('importCompetitiveDataset');
+      button.disabled = true;
+      try {
+        const params = new URLSearchParams({
+          connector_id:$('competitiveImportConnector').value.trim(),
+          store_id:$('competitiveImportStore').value.trim(),
+          source_ref:$('competitiveImportSourceRef').value.trim()
+        });
+        const importPath = '/v1/competitive/datasets/import';
+        const result = await api(`${importPath}?${params.toString()}`, {
+          method:'POST', headers:{'Content-Type':'text/csv; charset=utf-8'}, body:await file.text()
+        });
+        $('competitiveImportSummary').innerHTML = `<strong>处理 ${result.total_rows} 行</strong><div>新增 ${result.imported_count} 行，幂等 ${result.idempotent_count} 行，异常 ${result.error_count} 行。</div>`;
+        $('competitiveImportErrors').innerHTML = result.errors.length ? result.errors.map((item) => `<tr><td>${item.row}</td><td class="mono">${escapeHtml(item.field)}</td><td class="mono">${escapeHtml(item.code)}</td><td>${escapeHtml(item.message)}</td></tr>`).join('') : '<tr><td colspan="4"><div class="empty">本次导入没有错误</div></td></tr>';
+        $('competitiveQueryStore').value = $('competitiveImportStore').value.trim();
+        toast('竞品 CSV 导入完成');
+        await loadCompetitive();
+      } catch (error) {
+        $('competitiveImportSummary').textContent = error.message;
+        toast(error.message);
+      } finally { button.disabled = false; }
+    });
     $('evaluateCompetitive').addEventListener('click', async () => {
       try {
         const result = await api('/v1/competitive/monitors/evaluate-all', { method:'POST' });
@@ -2799,6 +3059,8 @@
         showLogin();
       }
     }
+    const localNow = new Date(Date.now() - new Date().getTimezoneOffset() * 60000);
+    $('competitiveDatasetObservedAt').value = localNow.toISOString().slice(0, 16);
     bootstrapConsole();
   </script>
 </body>
