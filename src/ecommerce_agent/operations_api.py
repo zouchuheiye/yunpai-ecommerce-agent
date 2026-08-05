@@ -11,6 +11,7 @@ from .auth import AdminPrincipal
 from .business import (
     CatalogItemUpsert,
     CompetitiveAlertTransition,
+    CompetitiveDatasetQuery,
     CompetitiveDatasetRow,
     CompetitiveEntityMatchCreate,
     CompetitiveMatchTransition,
@@ -568,6 +569,16 @@ def build_operations_router(
             admin.tenant_id,
         )
         return result
+
+    @router.post("/competitive/datasets/query")
+    def query_competitive_datasets(
+        payload: CompetitiveDatasetQuery,
+        admin: AdminPrincipal = Depends(require_admin),
+    ) -> dict[str, Any]:
+        return service.operations.competitive.query_datasets(
+            admin.tenant_id,
+            payload,
+        )
 
     @router.get("/competitive/matches")
     def list_competitive_matches(

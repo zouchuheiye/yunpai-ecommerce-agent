@@ -396,9 +396,9 @@ def test_approved_match_controls_price_alerts_and_agent_recommendations(tmp_path
         pending = competitive.record("tenant-test", observation)
         assert pending["actionable"] is False
         assert pending["alert_evaluation"]["eligible_competitors"] == 0
-        assert competitive.analyze_prices("tenant-test", "sku-a")["recommendations"][
-            0
-        ]["type"] == "entity_quality"
+        pending_analysis = competitive.analyze_prices("tenant-test", "sku-a")
+        assert pending_analysis["observations"] == []
+        assert pending_analysis["recommendations"] == []
 
         approve(service, match["id"])
         alerts = competitive.list_alerts("tenant-test")
@@ -422,7 +422,8 @@ def test_approved_match_controls_price_alerts_and_agent_recommendations(tmp_path
         )
         after_reject = competitive.analyze_prices("tenant-test", "sku-a")
         assert after_reject["summary"]["actionable_competitors"] == 0
-        assert after_reject["recommendations"][0]["type"] == "entity_quality"
+        assert after_reject["observations"] == []
+        assert after_reject["recommendations"] == []
         undercut_after = next(
             item
             for item in competitive.list_alerts("tenant-test")

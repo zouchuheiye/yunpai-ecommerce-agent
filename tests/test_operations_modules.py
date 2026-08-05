@@ -45,26 +45,21 @@ def test_virtual_connector_syncs_inventory_and_competitor_data(tmp_path) -> None
         analysis = service.operations.competitive.analyze_prices(
             "tenant-test", "YP-SKU-001"
         )
-        assert len(analysis["observations"]) == 2
-        assert analysis["summary"]["competitors"] == 2
-        assert analysis["summary"]["estimated_observations"] == 2
-        assert len(analysis["trends"]) == 2
-        assert {item["type"] for item in analysis["recommendations"]} == {
-            "entity_quality",
-        }
+        assert analysis["observations"] == []
+        assert analysis["summary"]["competitors"] == 0
+        assert analysis["summary"]["estimated_observations"] == 0
+        assert analysis["trends"] == []
+        assert analysis["recommendations"] == []
         assert analysis["summary"]["actionable_competitors"] == 0
-        assert all(item["evidence"]["is_estimate"] for item in analysis["observations"])
-        assert {item["position"] for item in analysis["observations"]} == {
-            "our_price_lower",
-            "our_price_higher",
-        }
         overview = service.operations.competitive.overview("tenant-test")
         assert overview["monitored_skus"] == 1
         assert overview["observation_count"] == 2
         assert overview["estimated_count"] == 2
-        assert service.operations.competitive.list_observations(
+        history = service.operations.competitive.list_observations(
             "tenant-test", subject_sku="YP-SKU-001"
         )
+        assert len(history) == 2
+        assert all(item["is_estimate"] for item in history)
 
         tool_names = {item["name"] for item in service.tools.catalog_for_model()}
         assert {"get_inventory_risk", "get_competitor_price_analysis"} <= tool_names
