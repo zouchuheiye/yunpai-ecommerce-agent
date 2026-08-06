@@ -308,9 +308,15 @@ def test_dataset_query_management_and_analysis_gates_are_separate(tmp_path) -> N
         actionable = service.operations.competitive.query_actionable_datasets(
             TENANT_ID, CompetitiveDatasetQuery(status="rejected")
         )
+        analysis = service.operations.competitive.analyze_prices(
+            TENANT_ID, "sku-a", store_id="store-a"
+        )
         assert management["items"][0]["match"]["id"] == pending["match"]["id"]
         assert management["items"][0]["actionable"] is False
         assert actionable == {"count": 0, "items": []}
+        assert analysis["observations"] == []
+        assert analysis["summary"]["competitors"] == 0
+        assert analysis["summary"]["unverified_competitors"] == 1
     finally:
         service.close()
 

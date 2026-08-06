@@ -46,8 +46,7 @@ class CompetitiveReportService:
         """对自有商品执行竞品价格区间对比分析。
 
         输入只允许已批准 match 绑定的价格证据（D-025 门禁由数据层
-        analyze_prices 的 actionable 标记保证：未批准数据 actionable=False，
-        本方法只对其做质量复核统计，绝不进入对比区间）。
+        analyze_prices 在查询入口强制执行；未批准数量仅作为质量指标透传）。
 
         返回结构对齐任务文档「先表格后文字」的报告前身：
         - data_as_of / summary：分析口径
@@ -60,6 +59,7 @@ class CompetitiveReportService:
         )
         entries = raw["observations"]
         actionable = [item for item in entries if item["actionable"]]
+        blocked_by_gate = int(raw["summary"]["unverified_competitors"])
 
         price_bands = self._build_price_bands(actionable)
         return {
@@ -67,9 +67,9 @@ class CompetitiveReportService:
             "store_id": store_id,
             "data_as_of": raw["data_as_of"],
             "summary": {
-                "total_observations": len(entries),
+                "total_observations": len(actionable) + blocked_by_gate,
                 "approved_observations": len(actionable),
-                "blocked_by_gate": len(entries) - len(actionable),
+                "blocked_by_gate": blocked_by_gate,
                 # 透传数据层的截断信号：竞品证据超过数据层上限时被静默截断，
                 # 分析层如实暴露，避免响应宣称有 cap 而实际数据不完整。
                 "history_truncated": raw["summary"]["history_truncated"],

@@ -1501,6 +1501,40 @@ class CompetitiveIntelligenceService:
             "actionable": match["status"] == "approved",
         }
 
+    def _count_unverified_latest(
+        self,
+        tenant_id: str,
+        *,
+        subject_sku: str,
+        store_id: str | None,
+    ) -> int:
+        conditions = ["o.tenant_id=?", "o.subject_sku=?"]
+        params: list[Any] = [tenant_id, subject_sku]
+        if store_id:
+            conditions.append("o.store_id=?")
+            params.append(store_id)
+        with self.db.connect() as conn:
+            row = conn.execute(
+                f"""
+                WITH ranked AS (
+                    SELECT o.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY o.competitor_name, o.competitor_sku
+                               ORDER BY o.observed_at DESC, o.created_at DESC, o.id DESC
+                           ) AS observation_rank
+                    FROM competitor_observations o
+                    WHERE {' AND '.join(conditions)}
+                )
+                SELECT COUNT(*) AS count
+                FROM ranked o
+                LEFT JOIN competitive_entity_matches m
+                  ON m.id=o.entity_match_id AND m.tenant_id=o.tenant_id
+                WHERE o.observation_rank=1 AND (m.id IS NULL OR m.status<>'approved')
+                """,
+                tuple(params),
+            ).fetchone()
+        return int(row["count"] or 0)
+
     def upsert_monitor(
         self,
         tenant_id: str,
@@ -1975,12 +2009,32 @@ class CompetitiveIntelligenceService:
         *,
         store_id: str | None = None,
     ) -> dict[str, Any]:
+        actionable = self.query_actionable_datasets(
+            tenant_id,
+            CompetitiveDatasetQuery(
+                store_id=store_id,
+                subject_sku=subject_sku,
+                limit=500,
+            ),
+        )
+        approved_match_ids = [item["match"]["id"] for item in actionable["items"]]
+        excluded_unverified = self._count_unverified_latest(
+            tenant_id,
+            subject_sku=subject_sku,
+            store_id=store_id,
+        )
         conditions = ["tenant_id=?", "subject_sku=?"]
         params: list[Any] = [tenant_id, subject_sku]
         if store_id:
             conditions.append("store_id=?")
             params.append(store_id)
-        rows = self._query(conditions, params, limit=5001)
+        if approved_match_ids:
+            placeholders = ",".join("?" for _ in approved_match_ids)
+            conditions.append(f"entity_match_id IN ({placeholders})")
+            params.extend(approved_match_ids)
+            rows = self._query(conditions, params, limit=5001)
+        else:
+            rows = []
         history_truncated = len(rows) > 5000
         rows = rows[:5000]
         latest: dict[tuple[str, str], dict[str, Any]] = {}
@@ -2083,7 +2137,7 @@ class CompetitiveIntelligenceService:
             limit=200,
         )
         recommendations = self._recommendations(actionable_entries)
-        if entries and not actionable_entries:
+        if excluded_unverified and not actionable_entries:
             recommendations.append(
                 {
                     "type": "entity_quality",
@@ -2098,7 +2152,7 @@ class CompetitiveIntelligenceService:
             "summary": {
                 "competitors": len(entries),
                 "actionable_competitors": len(actionable_entries),
-                "unverified_competitors": len(entries) - len(actionable_entries),
+                "unverified_competitors": excluded_unverified,
                 "history_points": len(rows),
                 "history_truncated": history_truncated,
                 "our_price_lower": sum(item["position"] == "our_price_lower" for item in entries),

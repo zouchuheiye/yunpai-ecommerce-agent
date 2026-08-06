@@ -218,12 +218,7 @@ def test_percent_outputs_are_rounded_to_two_decimals(tmp_path) -> None:
 
 
 def test_gate_counterexample_rejects_unapproved_in_analysis(tmp_path) -> None:
-    """反证：临时绕过 D-025 门禁（把 pending 当 actionable），
-    断言"未批准数据进入分析"必须失败。
-
-    通过 monkeypatch 把 analyze_prices 的返回值改为全部 actionable，
-    制造"门禁失效"的对照场景。
-    """
+    """严格入口回归：pending 只计入门禁阻挡数，不进入分析 observations。"""
     service = AgentService(make_settings(tmp_path))
     competitive = service.operations.competitive
     report = service.operations.competitive_report
@@ -252,14 +247,7 @@ def test_gate_counterexample_rejects_unapproved_in_analysis(tmp_path) -> None:
             not item["members"]
             for item in result["price_bands"]
         )
-
-        # 反证：若门禁失效（把 pending 观察强制标记 actionable），
-        # 未批准数据会进入区间——这正好证明正常路径下门禁挡住了它。
-        injected = competitive.analyze_prices("tenant-test", "sku-a")
-        for obs in injected["observations"]:
-            obs["actionable"] = True
-        bypassed = report._build_price_bands(injected["observations"])
-        assert any(item["members"] for item in bypassed)
+        assert result["observations"] == []
     finally:
         service.close()
 
