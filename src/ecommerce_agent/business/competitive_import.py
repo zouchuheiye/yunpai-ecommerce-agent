@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+import sqlite3
 import unicodedata
 from decimal import Decimal
 from typing import Any
@@ -117,6 +118,13 @@ def parse_competitive_csv(
     source_ref: str,
     source_type: CompetitorSource = "file_import",
 ) -> CompetitiveCsvParseResult:
+    normalized_source_ref = source_ref.strip()
+    if (
+        re.match(r"^[A-Za-z]:[\\/]", normalized_source_ref)
+        or normalized_source_ref.startswith(("/", "\\\\", "~/"))
+        or normalized_source_ref.casefold().startswith("file://")
+    ):
+        raise ValueError("competitive_source_ref_invalid")
     reader = csv.DictReader(io.StringIO(content.lstrip("\ufeff")))
     if not reader.fieldnames:
         raise ValueError("competitive_csv_header_missing")
@@ -145,7 +153,7 @@ def parse_competitive_csv(
                 )
             )
         except Exception as exc:
-            errors.append(_competitive_csv_error(row_number, exc))
+            errors.append(competitive_csv_error(row_number, exc))
     return CompetitiveCsvParseResult(
         total_rows=len(raw_rows),
         rows=rows,
@@ -159,6 +167,8 @@ def _competitive_csv_header_map(fieldnames: list[str]) -> dict[str, str]:
     for raw_name in fieldnames:
         name = str(raw_name or "").strip().lstrip("\ufeff")
         normalized_name = name.casefold()
+        if normalized_name in {"tenant_id", "租户id"}:
+            raise ValueError("competitive_csv_forbidden_column:tenant_id")
         canonical = COMPETITIVE_CSV_ALIASES.get(normalized_name)
         if canonical is None and (
             normalized_name.startswith("dim.") or name.startswith("维度.")
@@ -266,7 +276,7 @@ def _clean_csv_decimal(value: Any, field: str, *, money: bool) -> Decimal:
     return result.quantize(Decimal("0.01")) if money else result
 
 
-def _competitive_csv_error(row_number: int, exc: Exception) -> CompetitiveCsvError:
+def competitive_csv_error(row_number: int, exc: Exception) -> CompetitiveCsvError:
     if isinstance(exc, CompetitiveDatasetRowError):
         field, code, message = exc.field, exc.code, exc.message
     elif isinstance(exc, ValidationError):
@@ -274,10 +284,41 @@ def _competitive_csv_error(row_number: int, exc: Exception) -> CompetitiveCsvErr
         field = ".".join(str(item) for item in first["loc"]) or "row"
         code = "field_required" if first["type"] == "missing" else "value_invalid"
         message = str(first["msg"])
-    else:
+    elif isinstance(exc, sqlite3.IntegrityError):
         field = "row"
-        code = "row_invalid"
-        message = "row could not be parsed"
+        code = "row_conflict"
+        message = "row conflicts with an existing observation"
+    else:
+        known_errors = {
+            "stale_source_version": (
+                "observed_at",
+                "source version is older than the stored version",
+            ),
+            "source_version_conflict": (
+                "source_id",
+                "same source version has different content",
+            ),
+            "competitive_subject_sku_unavailable": (
+                "subject_sku",
+                "subject SKU is unavailable",
+            ),
+            "competitive_match_not_found": (
+                "entity_match_id",
+                "entity match is unavailable",
+            ),
+            "competitive_match_scope_mismatch": (
+                "entity_match_id",
+                "entity match is unavailable",
+            ),
+        }
+        detail = str(exc)
+        if detail in known_errors:
+            field, message = known_errors[detail]
+            code = detail
+        else:
+            field = "row"
+            code = "row_invalid"
+            message = "row could not be imported"
     return CompetitiveCsvError(
         row=row_number,
         field=field,

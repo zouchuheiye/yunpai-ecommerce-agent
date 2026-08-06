@@ -524,6 +524,52 @@ def build_operations_router(
         )
         return result
 
+    @router.post("/competitive/datasets/import")
+    async def import_competitive_dataset(
+        request: Request,
+        connector_id: str = Query(min_length=1, max_length=128),
+        store_id: str = Query(min_length=1, max_length=128),
+        source_ref: str = Query(min_length=4, max_length=500),
+        source_type: str = Query(
+            default="file_import",
+            pattern=r"^(authorized_api|licensed_provider|manual|file_import|virtual)$",
+        ),
+        admin: AdminPrincipal = Depends(require_admin),
+    ) -> dict[str, Any]:
+        try:
+            content = (await request.body()).decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="competitive_csv_encoding_invalid",
+            ) from exc
+        try:
+            result = service.operations.competitive.import_dataset_csv(
+                admin.tenant_id,
+                content,
+                connector_id=connector_id,
+                store_id=store_id,
+                source_ref=source_ref,
+                source_type=source_type,  # type: ignore[arg-type]
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        service.db.audit(
+            "competitive.dataset.imported",
+            admin.admin_id,
+            source_ref,
+            {
+                "connector_id": connector_id,
+                "store_id": store_id,
+                "source_type": source_type,
+                "total_rows": result["total_rows"],
+                "accepted_rows": result["accepted_rows"],
+                "rejected_rows": result["rejected_rows"],
+            },
+            admin.tenant_id,
+        )
+        return result
+
     @router.get("/competitive/matches")
     def list_competitive_matches(
         store_id: str | None = Query(default=None, max_length=128),

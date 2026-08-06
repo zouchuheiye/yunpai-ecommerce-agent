@@ -124,3 +124,24 @@ def test_csv_contract_rejects_missing_required_header_even_without_rows() -> Non
             "subject_price,currency,observed_at\n",
             **IMPORT_CONTEXT,
         )
+
+
+def test_csv_contract_rejects_tenant_column_and_absolute_source_path() -> None:
+    header = (
+        "tenant_id,source_id,subject_sku,competitor_name,competitor_sku,product_title,"
+        "subject_price,competitor_price,currency,observed_at"
+    )
+    with pytest.raises(ValueError, match="competitive_csv_forbidden_column:tenant_id"):
+        parse_competitive_csv(f"{header}\n", **IMPORT_CONTEXT)
+
+    with pytest.raises(ValueError, match="competitive_source_ref_invalid"):
+        parse_competitive_csv(
+            CSV_HEADER_WITHOUT_TENANT,
+            **{**IMPORT_CONTEXT, "source_ref": r"C:\Users\name\export.csv"},
+        )
+
+
+CSV_HEADER_WITHOUT_TENANT = (
+    "source_id,subject_sku,competitor_name,competitor_sku,product_title,"
+    "subject_price,competitor_price,currency,observed_at\n"
+)

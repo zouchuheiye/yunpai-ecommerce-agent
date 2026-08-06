@@ -1166,6 +1166,56 @@ class CompetitiveIntelligenceService:
             "write_status": observation_result["write_status"],
         }
 
+    def import_dataset_csv(
+        self,
+        tenant_id: str,
+        content: str,
+        *,
+        connector_id: str,
+        store_id: str,
+        source_ref: str,
+        source_type: CompetitorSource = "file_import",
+    ) -> dict[str, Any]:
+        from .competitive_import import competitive_csv_error, parse_competitive_csv
+
+        parsed = parse_competitive_csv(
+            content,
+            connector_id=connector_id,
+            store_id=store_id,
+            source_ref=source_ref,
+            source_type=source_type,
+        )
+        records: list[dict[str, Any]] = []
+        errors = [error.model_dump() for error in parsed.errors]
+        applied = 0
+        idempotent = 0
+        for parsed_row in parsed.rows:
+            try:
+                result = self.record_dataset(tenant_id, parsed_row.value)
+                records.append(result)
+                if result["write_status"] == "idempotent":
+                    idempotent += 1
+                else:
+                    applied += 1
+            except Exception as exc:
+                errors.append(
+                    competitive_csv_error(parsed_row.row, exc).model_dump()
+                )
+        errors.sort(key=lambda error: int(error["row"]))
+        return {
+            "total_rows": parsed.total_rows,
+            "accepted_rows": len(records),
+            "rejected_rows": len(errors),
+            "applied": applied,
+            "idempotent": idempotent,
+            "conflicts": sum(
+                error["code"] in {"source_version_conflict", "row_conflict"}
+                for error in errors
+            ),
+            "records": records,
+            "errors": errors,
+        }
+
     def upsert_monitor(
         self,
         tenant_id: str,
