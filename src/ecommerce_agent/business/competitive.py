@@ -296,6 +296,79 @@ class CompetitorObservationCreate(BaseModel):
         return self
 
 
+class CompetitiveDatasetRow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    connector_id: str = Field(min_length=1, max_length=128)
+    store_id: str = Field(min_length=1, max_length=128)
+    source_ref: str = Field(min_length=4, max_length=500)
+    source_type: CompetitorSource = "manual"
+    source_id: str = Field(min_length=1, max_length=256)
+    subject_sku: str = Field(min_length=1, max_length=128)
+    competitor_name: str = Field(min_length=1, max_length=200)
+    competitor_sku: str = Field(min_length=1, max_length=128)
+    product_title: str = Field(min_length=2, max_length=500)
+    brand: str | None = Field(default=None, max_length=128)
+    model: str | None = Field(default=None, max_length=128)
+    category: str | None = Field(default=None, max_length=200)
+    gtin: str | None = Field(default=None, max_length=64)
+    attributes: dict[str, str] = Field(default_factory=dict)
+    custom_dimensions: list[CompetitiveCustomDimension] = Field(
+        default_factory=list,
+        max_length=32,
+    )
+    comparison_keys: list[str] = Field(default_factory=list, max_length=20)
+    subject_price: Decimal = Field(gt=0)
+    competitor_price: Decimal = Field(gt=0)
+    currency: str = Field(default="CNY", min_length=3, max_length=3)
+    rating_value: Decimal | None = Field(default=None, ge=0)
+    rating_scale: Decimal | None = Field(default=None, gt=0)
+    sales_rank: int | None = Field(default=None, ge=1)
+    rank_scope: str | None = Field(default=None, min_length=1, max_length=200)
+    is_estimate: bool = True
+    observed_at: datetime
+    entity_match_id: str | None = Field(default=None, max_length=128)
+
+    @field_validator("observed_at")
+    @classmethod
+    def require_aware_observed_time(cls, value: datetime) -> datetime:
+        canonical_source_time(value)
+        return value
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not re.fullmatch(r"[A-Z]{3}", normalized):
+            raise ValueError("currency must be a three-letter code")
+        return normalized
+
+    @field_validator("rank_scope")
+    @classmethod
+    def normalize_rank_scope(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("rank_scope cannot be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_fact_pairs(self) -> "CompetitiveDatasetRow":
+        if self.source_type == "virtual" and not self.is_estimate:
+            raise ValueError("virtual dataset rows must be marked as estimates")
+        if (self.rating_value is None) != (self.rating_scale is None):
+            raise ValueError("rating_value and rating_scale must be provided together")
+        if (
+            self.rating_value is not None
+            and self.rating_scale is not None
+            and self.rating_value > self.rating_scale
+        ):
+            raise ValueError("rating_value cannot exceed rating_scale")
+        if (self.sales_rank is None) != (self.rank_scope is None):
+            raise ValueError("sales_rank and rank_scope must be provided together")
+        return self
+
 class CompetitiveMonitorUpsert(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
