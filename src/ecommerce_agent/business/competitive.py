@@ -4,6 +4,7 @@ import json
 import re
 import unicodedata
 import uuid
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from difflib import SequenceMatcher
@@ -369,6 +370,39 @@ class CompetitiveDatasetRow(BaseModel):
             raise ValueError("sales_rank and rank_scope must be provided together")
         return self
 
+    def competitor_identity(self) -> CompetitiveProductIdentity:
+        return CompetitiveProductIdentity(
+            title=self.product_title,
+            brand=self.brand,
+            model=self.model,
+            category=self.category,
+            gtin=self.gtin,
+            attributes=self.attributes,
+            custom_dimensions=self.custom_dimensions,
+        )
+
+    def observation(self, match_id: str) -> CompetitorObservationCreate:
+        return CompetitorObservationCreate(
+            connector_id=self.connector_id,
+            store_id=self.store_id,
+            subject_sku=self.subject_sku,
+            competitor_name=self.competitor_name,
+            competitor_sku=self.competitor_sku,
+            subject_price=self.subject_price,
+            competitor_price=self.competitor_price,
+            currency=self.currency,
+            rating_value=self.rating_value,
+            rating_scale=self.rating_scale,
+            sales_rank=self.sales_rank,
+            rank_scope=self.rank_scope,
+            source_type=self.source_type,
+            source_ref=self.source_ref,
+            is_estimate=self.is_estimate,
+            observed_at=self.observed_at,
+            source_id=self.source_id,
+            entity_match_id=match_id,
+        )
+
 class CompetitiveMonitorUpsert(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -395,16 +429,26 @@ class CompetitiveIntelligenceService:
     def __init__(self, db: Database):
         self.db = db
 
+    @contextmanager
+    def _write_connection(self, conn: Any | None = None):
+        if conn is not None:
+            yield conn
+            return
+        with self.db._write_lock, self.db.connect() as managed_conn:
+            managed_conn.execute("BEGIN IMMEDIATE")
+            yield managed_conn
+
     def record_entity_match(
         self,
         tenant_id: str,
         value: CompetitiveEntityMatchCreate,
+        *,
+        _conn: Any | None = None,
     ) -> dict[str, Any]:
         match_id = f"compmatch-{uuid.uuid4().hex}"
         now = utc_now()
         write_status = "applied"
-        with self.db._write_lock, self.db.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        with self._write_connection(_conn) as conn:
             subject_identity = self._f305_subject_identity(
                 conn,
                 tenant_id=tenant_id,
@@ -869,7 +913,14 @@ class CompetitiveIntelligenceService:
             },
         }
 
-    def record(self, tenant_id: str, value: CompetitorObservationCreate) -> dict[str, Any]:
+    def record(
+        self,
+        tenant_id: str,
+        value: CompetitorObservationCreate,
+        *,
+        _conn: Any | None = None,
+        _evaluate_alerts: bool = True,
+    ) -> dict[str, Any]:
         observation_id = f"competitor-{uuid.uuid4().hex}"
         observed_at = canonical_source_time(value.observed_at)
         payload = value.model_dump(mode="json")
@@ -877,8 +928,7 @@ class CompetitiveIntelligenceService:
         payload_hash = payload_digest(payload)
         now = utc_now()
         write_status = "applied"
-        with self.db._write_lock, self.db.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        with self._write_connection(_conn) as conn:
             if value.entity_match_id:
                 match_row = conn.execute(
                     """
@@ -1002,12 +1052,119 @@ class CompetitiveIntelligenceService:
             ).fetchone()
         result = self._view(dict(row))
         result["write_status"] = write_status
-        result["alert_evaluation"] = self.evaluate_scope(
-            tenant_id,
-            store_id=value.store_id,
-            subject_sku=value.subject_sku,
-        )
+        if _evaluate_alerts:
+            result["alert_evaluation"] = self.evaluate_scope(
+                tenant_id,
+                store_id=value.store_id,
+                subject_sku=value.subject_sku,
+            )
         return result
+
+    def record_dataset(
+        self,
+        tenant_id: str,
+        value: CompetitiveDatasetRow,
+    ) -> dict[str, Any]:
+        competitor_identity = value.competitor_identity()
+        identity_json = json.dumps(
+            competitor_identity.model_dump(mode="json"),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        with self._write_connection() as conn:
+            if value.entity_match_id:
+                match_row = conn.execute(
+                    "SELECT * FROM competitive_entity_matches WHERE id=? AND tenant_id=?",
+                    (value.entity_match_id, tenant_id),
+                ).fetchone()
+                if match_row is None:
+                    raise ValueError("competitive_match_not_found")
+                match_result = self._match_view(dict(match_row))
+            else:
+                match_row = conn.execute(
+                    """
+                    SELECT * FROM competitive_entity_matches
+                    WHERE tenant_id=? AND store_id=? AND subject_sku=?
+                      AND competitor_name=? AND competitor_sku=?
+                      AND competitor_identity_json=?
+                      AND status IN ('pending', 'approved')
+                    ORDER BY CASE status WHEN 'approved' THEN 0 ELSE 1 END,
+                             updated_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (
+                        tenant_id,
+                        value.store_id,
+                        value.subject_sku,
+                        value.competitor_name,
+                        value.competitor_sku,
+                        identity_json,
+                    ),
+                ).fetchone()
+                if match_row is not None:
+                    match_result = self._match_view(dict(match_row))
+                    match_result["write_status"] = "idempotent"
+                else:
+                    relation_payload = {
+                        "tenant_id": tenant_id,
+                        "store_id": value.store_id,
+                        "subject_sku": value.subject_sku,
+                        "competitor_name": value.competitor_name,
+                        "competitor_sku": value.competitor_sku,
+                        "competitor_identity": competitor_identity.model_dump(mode="json"),
+                    }
+                    match_result = self.record_entity_match(
+                        tenant_id,
+                        CompetitiveEntityMatchCreate(
+                            connector_id=value.connector_id,
+                            store_id=value.store_id,
+                            subject_sku=value.subject_sku,
+                            competitor_name=value.competitor_name,
+                            competitor_sku=value.competitor_sku,
+                            subject_identity=CompetitiveProductIdentity(
+                                title="F-305 subject snapshot"
+                            ),
+                            competitor_identity=competitor_identity,
+                            comparison_keys=value.comparison_keys,
+                            source_type=value.source_type,
+                            source_ref=value.source_ref,
+                            source_id=f"dataset-match:{payload_digest(relation_payload)}",
+                            is_estimate=value.is_estimate,
+                            observed_at=value.observed_at,
+                        ),
+                        _conn=conn,
+                    )
+            observation_result = self.record(
+                tenant_id,
+                value.observation(str(match_result["id"])),
+                _conn=conn,
+                _evaluate_alerts=False,
+            )
+            signal_rows = conn.execute(
+                """
+                SELECT s.*, m.status AS match_status, m.score AS match_score
+                FROM competitive_signals s
+                JOIN competitive_entity_matches m ON m.id=s.match_id
+                WHERE s.tenant_id=? AND s.match_id=?
+                ORDER BY s.observed_at DESC, s.created_at DESC
+                """,
+                (tenant_id, match_result["id"]),
+            ).fetchall()
+
+        return {
+            "match": {
+                key: item for key, item in match_result.items() if key != "write_status"
+            },
+            "identity": competitor_identity.model_dump(mode="json"),
+            "latest_observation": {
+                key: item
+                for key, item in observation_result.items()
+                if key not in {"write_status", "alert_evaluation"}
+            },
+            "signals": [self._signal_view(dict(row)) for row in signal_rows],
+            "actionable": match_result["status"] == "approved",
+            "write_status": observation_result["write_status"],
+        }
 
     def upsert_monitor(
         self,
@@ -2331,6 +2488,7 @@ class CompetitiveIntelligenceService:
             "is_estimate": bool(row["is_estimate"]),
             "observed_at": row["observed_at"],
             "source_id": row["source_id"],
+            "entity_match_id": row.get("entity_match_id"),
             "entity_match": match,
             "actionable": bool(match and match["status"] == "approved"),
         }

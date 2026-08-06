@@ -11,6 +11,7 @@ from .auth import AdminPrincipal
 from .business import (
     CatalogItemUpsert,
     CompetitiveAlertTransition,
+    CompetitiveDatasetRow,
     CompetitiveEntityMatchCreate,
     CompetitiveMatchTransition,
     CompetitiveMonitorUpsert,
@@ -492,6 +493,31 @@ def build_operations_router(
                 "competitor_sku": result["competitor_sku"],
                 "score": result["score"],
                 "recommended_status": result["recommended_status"],
+                "write_status": result["write_status"],
+            },
+            admin.tenant_id,
+        )
+        return result
+
+    @router.post("/competitive/datasets")
+    def record_competitive_dataset(
+        payload: CompetitiveDatasetRow,
+        admin: AdminPrincipal = Depends(require_admin),
+    ) -> dict[str, Any]:
+        try:
+            result = service.operations.competitive.record_dataset(
+                admin.tenant_id, payload
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        service.db.audit(
+            "competitive.dataset.recorded",
+            admin.admin_id,
+            result["latest_observation"]["id"],
+            {
+                "match_id": result["match"]["id"],
+                "store_id": result["match"]["store_id"],
+                "subject_sku": result["match"]["subject_sku"],
                 "write_status": result["write_status"],
             },
             admin.tenant_id,
