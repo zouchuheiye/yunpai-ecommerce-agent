@@ -403,6 +403,105 @@ class CompetitiveDatasetRow(BaseModel):
             entity_match_id=match_id,
         )
 
+
+class CompetitiveDimensionFilter(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(min_length=1, max_length=64)
+    value_type: Literal["text", "number", "boolean"]
+    value_text: str | None = Field(default=None, max_length=200)
+    value_number: Decimal | None = None
+    value_boolean: bool | None = None
+
+    @field_validator("key", "value_text")
+    @classmethod
+    def normalize_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("dimension filter text cannot be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_typed_value(self) -> "CompetitiveDimensionFilter":
+        values = {
+            "text": self.value_text,
+            "number": self.value_number,
+            "boolean": self.value_boolean,
+        }
+        if values[self.value_type] is None or any(
+            value is not None
+            for value_type, value in values.items()
+            if value_type != self.value_type
+        ):
+            raise ValueError("dimension filter must provide exactly its typed value")
+        return self
+
+
+class CompetitiveDatasetQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    store_id: str | None = Field(default=None, min_length=1, max_length=128)
+    subject_sku: str | None = Field(default=None, min_length=1, max_length=128)
+    category: str | None = Field(default=None, min_length=1, max_length=200)
+    brand: str | None = Field(default=None, min_length=1, max_length=128)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    price_min: Decimal | None = Field(default=None, ge=0)
+    price_max: Decimal | None = Field(default=None, ge=0)
+    rating_min: Decimal | None = Field(default=None, ge=0, le=5)
+    rating_max: Decimal | None = Field(default=None, ge=0, le=5)
+    sales_rank_min: int | None = Field(default=None, ge=1)
+    sales_rank_max: int | None = Field(default=None, ge=1)
+    rank_scope: str | None = Field(default=None, min_length=1, max_length=200)
+    status: CompetitiveMatchStatus | None = None
+    custom_dimensions: list[CompetitiveDimensionFilter] = Field(
+        default_factory=list,
+        max_length=32,
+    )
+    limit: int = Field(default=100, ge=1, le=500)
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().upper()
+        if not re.fullmatch(r"[A-Z]{3}", normalized):
+            raise ValueError("currency must be a three-letter code")
+        return normalized
+
+    @field_validator("store_id", "subject_sku", "category", "brand", "rank_scope")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("query text cannot be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_ranges(self) -> "CompetitiveDatasetQuery":
+        if (self.price_min is not None or self.price_max is not None) and self.currency is None:
+            raise ValueError("currency is required for price filters")
+        if (
+            self.sales_rank_min is not None or self.sales_rank_max is not None
+        ) and self.rank_scope is None:
+            raise ValueError("rank_scope is required for sales rank filters")
+        for minimum, maximum, label in (
+            (self.price_min, self.price_max, "price"),
+            (self.rating_min, self.rating_max, "rating"),
+            (self.sales_rank_min, self.sales_rank_max, "sales_rank"),
+        ):
+            if minimum is not None and maximum is not None and minimum > maximum:
+                raise ValueError(f"{label} minimum cannot exceed maximum")
+        keys = [item.key.casefold() for item in self.custom_dimensions]
+        if len(keys) != len(set(keys)):
+            raise ValueError("dimension filter keys must be unique")
+        return self
+
+
 class CompetitiveMonitorUpsert(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1214,6 +1313,192 @@ class CompetitiveIntelligenceService:
             ),
             "records": records,
             "errors": errors,
+        }
+
+    def query_datasets(
+        self, tenant_id: str, query: CompetitiveDatasetQuery
+    ) -> dict[str, Any]:
+        return self._query_datasets(tenant_id, query, approved_only=False)
+
+    def query_actionable_datasets(
+        self, tenant_id: str, query: CompetitiveDatasetQuery
+    ) -> dict[str, Any]:
+        return self._query_datasets(tenant_id, query, approved_only=True)
+
+    def _query_datasets(
+        self,
+        tenant_id: str,
+        query: CompetitiveDatasetQuery,
+        *,
+        approved_only: bool,
+    ) -> dict[str, Any]:
+        conditions = ["o.tenant_id=?", "o.entity_match_id IS NOT NULL"]
+        params: list[Any] = [tenant_id]
+        if query.store_id:
+            conditions.append("o.store_id=?")
+            params.append(query.store_id)
+        if query.subject_sku:
+            conditions.append("o.subject_sku=?")
+            params.append(query.subject_sku)
+        if approved_only:
+            conditions.append("m.status='approved'")
+        elif query.status:
+            conditions.append("m.status=?")
+            params.append(query.status)
+
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                f"""
+                WITH ranked AS (
+                    SELECT o.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY o.entity_match_id
+                               ORDER BY o.observed_at DESC, o.created_at DESC, o.id DESC
+                           ) AS observation_rank
+                    FROM competitor_observations o
+                    WHERE o.tenant_id=? AND o.entity_match_id IS NOT NULL
+                )
+                SELECT o.*, m.competitor_identity_json,
+                       m.status AS entity_match_status,
+                       m.score AS entity_match_score,
+                       m.recommended_status AS entity_match_recommended_status
+                FROM ranked o
+                JOIN competitive_entity_matches m
+                  ON m.id=o.entity_match_id AND m.tenant_id=o.tenant_id
+                WHERE o.observation_rank=1
+                  AND {' AND '.join(conditions)}
+                ORDER BY o.observed_at DESC, o.created_at DESC, o.id DESC
+                """,
+                (tenant_id, *params),
+            ).fetchall()
+
+        items: list[dict[str, Any]] = []
+        for raw in rows:
+            row = dict(raw)
+            try:
+                identity = CompetitiveProductIdentity.model_validate_json(
+                    row["competitor_identity_json"]
+                )
+            except (TypeError, ValueError):
+                continue
+            if not self._dataset_matches_query(row, identity, query):
+                continue
+            items.append(self._dataset_view(tenant_id, row, identity))
+            if len(items) >= query.limit:
+                break
+        return {"count": len(items), "items": items}
+
+    @classmethod
+    def _dataset_matches_query(
+        cls,
+        row: dict[str, Any],
+        identity: CompetitiveProductIdentity,
+        query: CompetitiveDatasetQuery,
+    ) -> bool:
+        for actual, expected in (
+            (identity.category, query.category),
+            (identity.brand, query.brand),
+        ):
+            if expected and cls._normalize_query_text(
+                actual
+            ) != cls._normalize_query_text(expected):
+                return False
+        if query.currency and str(row["currency"]).upper() != query.currency:
+            return False
+        price = Decimal(str(row["competitor_price"]))
+        if query.price_min is not None and price < query.price_min:
+            return False
+        if query.price_max is not None and price > query.price_max:
+            return False
+
+        rating = None
+        if row.get("rating_value") is not None and row.get("rating_scale") is not None:
+            rating = (
+                Decimal(str(row["rating_value"]))
+                / Decimal(str(row["rating_scale"]))
+                * Decimal("5")
+            )
+        if query.rating_min is not None and (
+            rating is None or rating < query.rating_min
+        ):
+            return False
+        if query.rating_max is not None and (
+            rating is None or rating > query.rating_max
+        ):
+            return False
+
+        rank = int(row["sales_rank"]) if row.get("sales_rank") is not None else None
+        if query.rank_scope and cls._normalize_query_text(
+            row.get("rank_scope")
+        ) != cls._normalize_query_text(query.rank_scope):
+            return False
+        if query.sales_rank_min is not None and (
+            rank is None or rank < query.sales_rank_min
+        ):
+            return False
+        if query.sales_rank_max is not None and (
+            rank is None or rank > query.sales_rank_max
+        ):
+            return False
+        dimensions = {item.key.casefold(): item for item in identity.custom_dimensions}
+        return all(
+            cls._custom_dimension_matches(dimensions.get(item.key.casefold()), item)
+            for item in query.custom_dimensions
+        )
+
+    @classmethod
+    def _custom_dimension_matches(
+        cls,
+        dimension: CompetitiveCustomDimension | None,
+        expected: CompetitiveDimensionFilter,
+    ) -> bool:
+        if dimension is None or dimension.value_type != expected.value_type:
+            return False
+        if expected.value_type == "text":
+            return cls._normalize_query_text(
+                dimension.value_text
+            ) == cls._normalize_query_text(expected.value_text)
+        if expected.value_type == "number":
+            return dimension.value_number == expected.value_number
+        return dimension.value_boolean is expected.value_boolean
+
+    @staticmethod
+    def _normalize_query_text(value: str | None) -> str:
+        if value is None:
+            return ""
+        return unicodedata.normalize("NFKC", str(value)).casefold().strip()
+
+    def _dataset_view(
+        self,
+        tenant_id: str,
+        observation_row: dict[str, Any],
+        identity: CompetitiveProductIdentity,
+    ) -> dict[str, Any]:
+        match_id = str(observation_row["entity_match_id"])
+        with self.db.connect() as conn:
+            match_row = conn.execute(
+                "SELECT * FROM competitive_entity_matches WHERE id=? AND tenant_id=?",
+                (match_id, tenant_id),
+            ).fetchone()
+            signal_rows = conn.execute(
+                """
+                SELECT s.*, m.status AS match_status, m.score AS match_score
+                FROM competitive_signals s
+                JOIN competitive_entity_matches m ON m.id=s.match_id
+                WHERE s.tenant_id=? AND s.match_id=?
+                ORDER BY s.observed_at DESC, s.created_at DESC
+                """,
+                (tenant_id, match_id),
+            ).fetchall()
+        if match_row is None:
+            raise ValueError("competitive_match_not_found")
+        match = self._match_view(dict(match_row))
+        return {
+            "match": match,
+            "identity": identity.model_dump(mode="json"),
+            "latest_observation": self._view(observation_row),
+            "signals": [self._signal_view(dict(row)) for row in signal_rows],
+            "actionable": match["status"] == "approved",
         }
 
     def upsert_monitor(
