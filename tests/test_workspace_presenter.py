@@ -162,3 +162,118 @@ def test_operations_report_does_not_forward_long_model_narrative() -> None:
     assert "订单较前半段下降 52.9%" in rendered
     assert "模型分析原文" not in rendered
     assert "分析中发现 1 个值得关注的经营信号" in rendered
+
+
+def test_governance_presents_customer_quality_review_facts() -> None:
+    view = present_observation(
+        "get_governance_status",
+        {
+            "knowledge": {"active_count": 5, "candidate_count": 0},
+            "sops": [{"id": "sop-one"}, {"id": "sop-two"}],
+            "evolution_candidates": [],
+            "quality": {
+                "ruleset_version": "qa-v1",
+                "total_runs": 6,
+                "average_score": 93.5,
+                "pending_reviews": 2,
+                "issues": [{"code": "sensitive_data_redacted", "count": 1}],
+            },
+        },
+    )
+
+    rendered = json.dumps(view, ensure_ascii=False)
+    assert "客服质检共有 6 条记录" in rendered
+    assert "2 条等待人工复核" in rendered
+    assert "平均得分 93.50 分" in rendered
+    assert "ruleset_version" not in rendered
+    assert "sensitive_data_redacted" not in rendered
+
+
+def test_governance_presents_customer_agent_evaluation_facts() -> None:
+    view = present_observation(
+        "get_governance_status",
+        {
+            "knowledge": {"active_count": 5, "candidate_count": 0},
+            "sops": [{"id": "sop-one"}, {"id": "sop-two"}],
+            "evolution_candidates": [],
+            "evaluations": {
+                "suites": {"frozen": 1},
+                "runs": {"passed": 1},
+                "latest_run": {
+                    "id": "eval-run-secret",
+                    "suite_id": "eval-suite-secret",
+                    "status": "passed",
+                    "actual": "raw response must not leak",
+                },
+                "runner_version": "customer-eval-v2",
+            },
+        },
+    )
+
+    rendered = json.dumps(view, ensure_ascii=False)
+    assert "客户 Agent 评测共有 1 个套件，其中 1 个已冻结" in rendered
+    assert "目前共有 1 次评测运行：1 次通过、0 次失败" in rendered
+    assert "最近一次运行已通过" in rendered
+    assert "eval-run-secret" not in rendered
+    assert "eval-suite-secret" not in rendered
+    assert "customer-eval-v2" not in rendered
+    assert "raw response must not leak" not in rendered
+
+
+def test_governance_keeps_empty_and_unknown_evaluation_states_conservative() -> None:
+    empty = json.dumps(
+        present_observation(
+            "get_governance_status",
+            {
+                "quality": {
+                    "total_runs": 0,
+                    "average_score": 0,
+                    "pending_reviews": 0,
+                },
+                "evaluations": {
+                    "suites": {},
+                    "runs": {},
+                    "latest_run": None,
+                },
+            },
+        ),
+        ensure_ascii=False,
+    )
+    unknown = json.dumps(
+        present_observation(
+            "get_governance_status",
+            {
+                "evaluations": {
+                    "suites": {"future_suite_state": 2},
+                    "runs": {"future_run_state": 3},
+                    "latest_run": {"status": "future_run_state"},
+                }
+            },
+        ),
+        ensure_ascii=False,
+    )
+
+    assert "目前没有质检记录，待人工复核 0 条" in empty
+    assert "目前还没有评测运行记录" in empty
+    assert "模块不可用" not in empty
+    assert "状态待核实" in unknown
+    assert "future_suite_state" not in unknown
+    assert "future_run_state" not in unknown
+
+
+def test_governance_does_not_invent_a_latest_completed_evaluation() -> None:
+    view = present_observation(
+        "get_governance_status",
+        {
+            "evaluations": {
+                "suites": {"frozen": 1},
+                "runs": {"running": 1},
+                "latest_run": None,
+            }
+        },
+    )
+
+    rendered = json.dumps(view, ensure_ascii=False)
+    assert "目前共有 1 次评测运行：1 次运行中" in rendered
+    assert "目前还没有已完成的评测运行" in rendered
+    assert "最近一次运行状态待核实" not in rendered

@@ -660,6 +660,80 @@ def test_workspace_enforces_tool_step_limit_without_losing_observations(
     assert "查询步数上限" in response_payload["执行边界"][-1]["message"]
 
 
+def test_workspace_governance_observation_reaches_answer_model_with_quality_and_evaluations(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    monkeypatch.setattr(
+        service.quality,
+        "summary",
+        lambda tenant_id: {
+            "total_runs": 6,
+            "average_score": 93.5,
+            "pending_reviews": 2,
+            "issues": [],
+        },
+    )
+    monkeypatch.setattr(
+        service.evaluations,
+        "overview",
+        lambda tenant_id: {
+            "suites": {"frozen": 1},
+            "runs": {"passed": 1},
+            "latest_run": {"id": "hidden-run", "status": "passed"},
+            "runner_version": "hidden-runner",
+        },
+    )
+    decisions = iter(
+        [
+            {
+                "mode": "observe",
+                "tool_name": "get_governance_status",
+                "arguments": {},
+                "reason": "核对质检和客户评测事实",
+            },
+            {
+                "mode": "answer",
+                "tool_name": None,
+                "arguments": {},
+                "response": None,
+                "reason": "已经取得治理事实",
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        service.model, "generate_json", lambda messages, **kwargs: next(decisions)
+    )
+    captured = []
+
+    def stream_generate(messages):
+        captured.extend(messages)
+        return iter(["当前有 2 条质检等待复核，最近一次客户评测已通过。"])
+
+    monkeypatch.setattr(service.model, "stream_generate", stream_generate)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-governance-facts-001",
+                "message": "查询当前质检待复核数量和客户 Agent 评测结果。",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = json.loads(captured[-1]["content"])
+    rendered = json.dumps(payload, ensure_ascii=False)
+    assert "2 条等待人工复核" in rendered
+    assert "最近一次运行已通过" in rendered
+    assert "hidden-run" not in rendered
+    assert "hidden-runner" not in rendered
+
+
 def test_inventory_risk_catalog_allows_authorized_full_scope_query(tmp_path) -> None:
     app = create_app(make_settings(tmp_path))
     catalog = {

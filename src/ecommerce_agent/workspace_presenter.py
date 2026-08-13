@@ -6,7 +6,7 @@ from typing import Any
 TOOL_LABELS: dict[str, str] = {
     "get_workspace_overview": "经营全局概况",
     "get_customer_service_status": "客服与接待情况",
-    "get_governance_status": "知识与自进化情况",
+    "get_governance_status": "知识、SOP、质检与评测情况",
     "get_channel_status": "渠道连接情况",
     "get_module_registry": "业务能力情况",
     "get_catalog_status": "商品目录情况",
@@ -186,10 +186,101 @@ def _governance_facts(observation: dict[str, Any]) -> list[str]:
     knowledge = _dict(observation.get("knowledge"))
     sops = _list(observation.get("sops"))
     candidates = _list(observation.get("evolution_candidates"))
-    return [
+    facts = [
         f"知识库已有 {_number(knowledge.get('active_count'))} 条生效知识，另有 {_number(knowledge.get('candidate_count'))} 条候选知识等待审核。",
         f"当前维护了 {len(sops)} 套标准处理流程，有 {len(candidates)} 条自进化候选等待评估。",
     ]
+    if "quality" in observation:
+        facts.extend(_quality_facts(_dict(observation.get("quality"))))
+    if "evaluations" in observation:
+        facts.extend(_evaluation_facts(_dict(observation.get("evaluations"))))
+    return facts
+
+
+def _quality_facts(summary: dict[str, Any]) -> list[str]:
+    total = _number(summary.get("total_runs"))
+    pending = _number(summary.get("pending_reviews"))
+    if total <= 0:
+        return [f"目前没有质检记录，待人工复核 {pending} 条。"]
+    try:
+        average = f"{float(summary.get('average_score') or 0):.2f}"
+    except (TypeError, ValueError):
+        average = "待核实"
+    return [
+        f"客服质检共有 {total} 条记录，其中 {pending} 条等待人工复核，平均得分 {average} 分。"
+    ]
+
+
+def _evaluation_facts(overview: dict[str, Any]) -> list[str]:
+    suite_counts = _dict(overview.get("suites"))
+    run_counts = _dict(overview.get("runs"))
+    suite_total = sum(_number(value) for value in suite_counts.values())
+    run_total = sum(_number(value) for value in run_counts.values())
+
+    facts: list[str] = []
+    if suite_total:
+        suite_parts = []
+        for status, label in (
+            ("draft", "草稿"),
+            ("frozen", "已冻结"),
+            ("retired", "已停用"),
+        ):
+            count = _number(suite_counts.get(status))
+            if count:
+                suite_parts.append(f"{count} 个{label}")
+        unknown_suites = sum(
+            _number(value)
+            for status, value in suite_counts.items()
+            if status not in {"draft", "frozen", "retired"}
+        )
+        if unknown_suites:
+            suite_parts.append(f"{unknown_suites} 个状态待核实")
+        facts.append(
+            f"客户 Agent 评测共有 {suite_total} 个套件，其中 "
+            + "、".join(suite_parts)
+            + "。"
+        )
+    else:
+        facts.append("客户 Agent 评测目前没有套件。")
+
+    if not run_total:
+        facts.append("目前还没有评测运行记录。")
+        return facts
+
+    run_parts = []
+    if "passed" in run_counts or "failed" in run_counts:
+        run_parts.extend(
+            [
+                f"{_number(run_counts.get('passed'))} 次通过",
+                f"{_number(run_counts.get('failed'))} 次失败",
+            ]
+        )
+    for status, label in (("running", "运行中"), ("interrupted", "已中断")):
+        count = _number(run_counts.get(status))
+        if count:
+            run_parts.append(f"{count} 次{label}")
+    unknown_runs = sum(
+        _number(value)
+        for status, value in run_counts.items()
+        if status not in {"passed", "failed", "running", "interrupted"}
+    )
+    if unknown_runs:
+        run_parts.append(f"{unknown_runs} 次状态待核实")
+
+    latest_value = overview.get("latest_run")
+    if latest_value is None:
+        latest_fact = "目前还没有已完成的评测运行。"
+    else:
+        latest = _dict(latest_value)
+        latest_status = {
+            "passed": "已通过",
+            "failed": "未通过",
+            "running": "运行中",
+            "interrupted": "已中断",
+        }.get(str(latest.get("status") or ""), "状态待核实")
+        latest_fact = f"最近一次运行{latest_status}。"
+    facts.append(f"目前共有 {run_total} 次评测运行：" + "、".join(run_parts) + "；" + latest_fact)
+    return facts
 
 
 def _channel_facts(observation: dict[str, Any]) -> list[str]:
