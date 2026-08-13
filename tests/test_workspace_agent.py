@@ -271,6 +271,151 @@ def test_workspace_never_executes_write_requests_without_confirmation(
     assert done["advanced_view"] == "orders"
 
 
+def test_workspace_reviews_negated_product_write_as_read_only(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    decisions = iter(
+        [
+            {
+                "mode": "propose_action",
+                "tool_name": None,
+                "arguments": {},
+                "response": "需要确认后才能继续。",
+                "reason": "检测到修改商品的表达",
+                "action_summary": "修改商品信息",
+                "advanced_view": "commerce",
+            },
+            {
+                "mode": "observe",
+                "tool_name": "get_catalog_status",
+                "arguments": {"limit": 20},
+                "reason": "只读核对商品名称、状态和价格",
+            },
+            {
+                "mode": "answer",
+                "tool_name": None,
+                "arguments": {},
+                "response": None,
+                "reason": "已经取得商品目录事实",
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        service.model, "generate_json", lambda messages, **kwargs: next(decisions)
+    )
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda messages: iter(["已完成商品名称、状态和价格的只读查询。"]),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-negated-product-write-001",
+                "message": (
+                    "只查询商品 QC-AF5-WHITE 当前的名称、状态和销售价格，"
+                    "不修改任何数据。"
+                ),
+                "history": [],
+                "context": {},
+            },
+        )
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert any(
+        event.get("tool_name") == "get_catalog_status"
+        for event in events
+        if event["event"] == "tool"
+    )
+    done = events[-1]["response"]
+    assert done["mode"] == "answer"
+    assert done["requires_confirmation"] is False
+
+
+def test_workspace_reviews_negated_governance_writes_as_read_only(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    decisions = iter(
+        [
+            {
+                "mode": "propose_action",
+                "tool_name": None,
+                "arguments": {},
+                "response": "需要确认后才能继续。",
+                "reason": "检测到知识治理动作",
+                "action_summary": "修改或审批治理内容",
+                "advanced_view": "knowledge",
+            },
+            {
+                "mode": "observe",
+                "tool_name": "get_governance_status",
+                "arguments": {},
+                "reason": "只读核对知识、SOP 和候选数量",
+            },
+            {
+                "mode": "answer",
+                "tool_name": None,
+                "arguments": {},
+                "response": None,
+                "reason": "已经取得治理事实",
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        service.model, "generate_json", lambda messages, **kwargs: next(decisions)
+    )
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda messages: iter(["已完成知识库和 SOP 状态的只读查询。"]),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-negated-governance-write-001",
+                "message": (
+                    "只读检查当前知识库和 SOP 状态，告诉我生效知识数量、SOP 数量"
+                    "和待审核学习候选数量，不修改或审批任何内容。"
+                ),
+                "history": [],
+                "context": {},
+            },
+        )
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert any(
+        event.get("tool_name") == "get_governance_status"
+        for event in events
+        if event["event"] == "tool"
+    )
+    done = events[-1]["response"]
+    assert done["mode"] == "answer"
+    assert done["requires_confirmation"] is False
+
+
+def test_workspace_write_gate_respects_negation_scope(tmp_path) -> None:
+    app = create_app(make_settings(tmp_path))
+    gate = app.state.workspace_agent._requires_confirmation_request
+
+    assert gate("查看实验状态，不创建或修改实验。") is False
+    assert gate("不要只查询，直接修改商品价格。") is True
+    assert gate("不修改商品，但创建采购单。") is True
+    assert gate("查询后审批这些候选。") is True
+    assert gate("查询后预算是多少？") is False
+
+
 def test_workspace_write_gate_overrides_clarification_that_promises_missing_capability(
     tmp_path, monkeypatch
 ) -> None:

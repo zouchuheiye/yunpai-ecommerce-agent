@@ -25,9 +25,9 @@
 - 消费：`POST /v1/admin/workspace/chat/stream`
 - 产出：STD-02、STD-04 的否定式只读请求不会返回 `propose_action`
 
-- [ ] 添加商品只读查询测试，模型返回只读计划时断言 `requires_confirmation=false` 且没有确认卡。
-- [ ] 添加知识库/SOP 只读查询测试，覆盖同一句中的 `不修改或审批`。
-- [ ] 运行两个测试并确认旧实现因返回 `propose_action` 而失败。
+- [x] 添加商品只读查询测试，模型返回只读计划时断言 `requires_confirmation=false` 且没有确认卡。
+- [x] 添加知识库/SOP 只读查询测试，覆盖同一句中的 `不修改或审批`。
+- [x] 运行两个测试并确认旧实现因返回 `propose_action` 而失败。
 
 ## Task 2：实现否定作用域清洗并保护真实写请求
 
@@ -41,12 +41,12 @@
 - 产出：`_strip_negated_write_actions(message: str) -> str`
 - 产出：`_requires_confirmation_request(message: str) -> bool` 仅对清洗后仍存在的写意图返回真
 
-- [ ] 增加“不创建或修改实验”的只读边界测试。
-- [ ] 增加“不要只查询，直接修改价格”的真实写请求测试。
-- [ ] 增加“不修改商品，但创建采购单”的混合请求测试。
-- [ ] 实现最小清洗逻辑：仅移除明确否定词直接控制的写动作，不删除同句其他动作。
-- [ ] 运行新增测试并确认全部通过。
-- [ ] 运行现有写操作门禁测试，确认退款、采购、改价等仍需确认。
+- [x] 增加“不创建或修改实验”的只读边界测试。
+- [x] 增加“不要只查询，直接修改价格”的真实写请求测试。
+- [x] 增加“不修改商品，但创建采购单”的混合请求测试。
+- [x] 实现最小清洗逻辑：仅移除明确否定词直接控制的写动作，不删除同句其他动作。
+- [x] 运行新增测试并确认全部通过。
+- [x] 运行现有写操作门禁测试，确认退款、采购、改价等仍需确认。
 
 ## Task 3：回归、反证与交付
 
@@ -54,12 +54,23 @@
 
 - 修改：`docs/tasks/WORKSPACE_NEGATED_ACTION_GUARD_PLAN.md`，记录实际测试证据
 
-- [ ] 运行 `tests/test_workspace_agent.py` 和 `tests/test_policy.py`。
-- [ ] 运行 Workspace 邻接 API 测试和 `python -m compileall -q src`。
-- [ ] 运行 `git diff --check`。
-- [ ] 临时禁用否定式清洗，确认 STD-02/STD-04 测试失败；立即恢复并复验。
-- [ ] 检查 diff 只包含本修复文档、统筹门禁与对应测试。
-- [ ] 提交独立小提交；不自行合并。
+- [x] 运行 `tests/test_workspace_agent.py` 和 `tests/test_policy.py`。
+- [x] 运行 Workspace 邻接 API 测试和 `python -m compileall -q src`。
+- [x] 运行 `git diff --check`。
+- [x] 临时禁用否定式清洗，确认 STD-02/STD-04 测试失败；立即恢复并复验。
+- [x] 检查 diff 只包含本修复文档、统筹门禁与对应测试。
+- [x] 提交独立小提交；不自行合并。
+
+## 实施证据（2026-08-13）
+
+- RED：STD-02、STD-04 两条新增测试在旧实现上均失败，失败点为没有进入对应只读工具链。
+- 新增与既有门禁定向：`5 passed`。
+- 统筹 Agent 专项：`25 passed`；全局策略：`10 passed`。
+- 管理页、展示层与邻接 API：`14 passed`。
+- 恢复实现后的合并复验：`49 passed in 198.93s`。
+- 反证：临时让 `_strip_negated_write_actions` 原样返回输入后，STD-02、STD-04 均按预期失败；恢复后合并复验通过。
+- 静态检查：`python -m compileall -q src` 与 `git diff --check` 通过。
+- 尚需：使用谢良璇人工测试同环境的真实模型复跑 STD-02、STD-04，作为最终人工验收门禁。
 
 ## 完成标准
 

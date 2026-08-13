@@ -90,11 +90,30 @@ WORKSPACE_WRITE_TARGETS = (
     r"调拨|付款|发布|审批|回滚|删除|权限|启用|停用"
 )
 WORKSPACE_WRITE_VERBS = r"生成|创建|发起|提交|执行|办理|修改|调整|确认后|直接|全部|批量"
+WORKSPACE_NEGATED_WRITE_ACTIONS = (
+    r"退款|退钱|赔付|赔偿|改价|调价|采购|下单|订货|调拨|付款|发布|审批|"
+    r"回滚|删除|启用|停用|创建|生成|发起|提交|执行|办理|修改|调整"
+)
+WORKSPACE_STANDALONE_WRITE_ACTIONS = (
+    r"退款|退钱|赔付|赔偿|改价|调价|投放|采购|下单|调拨|付款|发布|审批|"
+    r"回滚|删除|启用|停用"
+)
+WORKSPACE_NEGATED_WRITE_ACTION_PATTERN = re.compile(
+    rf"(?:不|不要|无需|无须|不必|不得|不能|不会|禁止)"
+    rf"(?:再|直接|进行)?"
+    rf"(?:{WORKSPACE_NEGATED_WRITE_ACTIONS})"
+    rf"(?:(?:或|和|、)(?:{WORKSPACE_NEGATED_WRITE_ACTIONS}))*"
+)
 WORKSPACE_WRITE_REQUEST_PATTERNS = (
     rf"(?:{WORKSPACE_WRITE_VERBS}).{{0,24}}(?:{WORKSPACE_WRITE_TARGETS})",
     rf"(?:{WORKSPACE_WRITE_TARGETS}).{{0,24}}(?:{WORKSPACE_WRITE_VERBS})",
     rf"把.{{0,40}}(?:{WORKSPACE_WRITE_TARGETS})",
+    rf"(?:后|再|然后|随后|接着|并|并且).{{0,8}}(?:{WORKSPACE_STANDALONE_WRITE_ACTIONS})",
 )
+
+
+def _strip_negated_write_actions(message: str) -> str:
+    return WORKSPACE_NEGATED_WRITE_ACTION_PATTERN.sub("", message)
 
 
 WORKSPACE_SYSTEM_PROMPT = """你是云湃电商一体机的统筹 Agent，服务对象是店主和运营负责人。
@@ -907,9 +926,13 @@ class WorkspaceAgent:
 
     @staticmethod
     def _requires_confirmation_request(message: str) -> bool:
-        if is_business_action_request(message):
+        actionable_message = _strip_negated_write_actions(message)
+        if is_business_action_request(actionable_message):
             return True
-        return any(re.search(pattern, message) for pattern in WORKSPACE_WRITE_REQUEST_PATTERNS)
+        return any(
+            re.search(pattern, actionable_message)
+            for pattern in WORKSPACE_WRITE_REQUEST_PATTERNS
+        )
 
     @staticmethod
     def _observing_message(tool_name: str | None) -> str:
