@@ -734,13 +734,24 @@
       if (buffer.trim()) emit(buffer);
     }
 
+    const advancedDestinations = Object.freeze({
+      commerce: {label:'查看详细商品', href:'/admin/advanced?view=commerce'}
+    });
+
+    function detailActionHtml(advancedView) {
+      const destination = advancedDestinations[advancedView];
+      if (!destination) return '';
+      return `<div class="action-card"><a class="button small" href="${destination.href}">${escapeHtml(destination.label)} ↗</a></div>`;
+    }
+
     function appendMessage(role, content, details = {}) {
       const row = document.createElement('div'); row.className = `message-row ${role}`;
       const avatar = role === 'assistant' ? '<span class="avatar">Y</span>' : '';
       const message = role === 'assistant' ? formatAgentText(content) : escapeHtml(content);
       const trace = role === 'assistant' && (details.toolLabel || details.toolSummary) ? `<details class="trace"><summary>查看处理过程</summary><div class="trace-body"><span><strong>查看内容：</strong>${escapeHtml(details.toolLabel || '业务信息')}</span>${details.toolSummary ? `<span><strong>核对结果：</strong>${escapeHtml(details.toolSummary)}</span>` : ''}</div></details>` : '';
+      const detailAction = role === 'assistant' ? detailActionHtml(details.advancedView) : '';
       const action = details.requiresConfirmation ? `<div class="action-card"><strong>需要你确认后再执行</strong><p>${escapeHtml(details.actionSummary || '该请求会改变业务状态。')}</p><a class="button small" href="/admin/advanced">进入高级管理确认 ↗</a></div>` : '';
-      row.innerHTML = `${avatar}<div class="message-card"><div class="bubble">${message}</div><div class="message-meta">${role === 'assistant' ? '统筹 Agent' : '你'} · ${new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false})}</div>${trace}${action}</div>`;
+      row.innerHTML = `${avatar}<div class="message-card"><div class="bubble">${message}</div><div class="message-meta">${role === 'assistant' ? '统筹 Agent' : '你'} · ${new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false})}</div>${trace}${detailAction}${action}</div>`;
       $('messageList').appendChild(row); $('messageList').scrollTop = $('messageList').scrollHeight; return row.querySelector('.bubble');
     }
 
@@ -768,8 +779,9 @@
             const result = event.response || {}; if (!bubble) { answer = result.answer || ''; bubble = appendMessage('assistant', answer); }
             else { bubble.innerHTML = formatAgentText(answer); }
             const card = bubble.closest('.message-card');
-            const details = {toolLabel:result.tool_label || state.currentTool?.tool_label,toolSummary:state.currentTool?.summary,requiresConfirmation:result.requires_confirmation,actionSummary:result.action_summary};
+            const details = {toolLabel:result.tool_label || state.currentTool?.tool_label,toolSummary:state.currentTool?.summary,advancedView:result.advanced_view,requiresConfirmation:result.requires_confirmation,actionSummary:result.action_summary};
             if (details.toolLabel || details.toolSummary) card.insertAdjacentHTML('beforeend', `<details class="trace"><summary>查看处理过程</summary><div class="trace-body"><span><strong>查看内容：</strong>${escapeHtml(details.toolLabel || '业务信息')}</span>${details.toolSummary ? `<span><strong>核对结果：</strong>${escapeHtml(details.toolSummary)}</span>` : ''}</div></details>`);
+            const detailAction = detailActionHtml(details.advancedView); if (detailAction) card.insertAdjacentHTML('beforeend', detailAction);
             if (details.requiresConfirmation) card.insertAdjacentHTML('beforeend', `<div class="action-card"><strong>需要你确认后再执行</strong><p>${escapeHtml(details.actionSummary || '该请求会改变业务状态。')}</p><a class="button small" href="/admin/advanced">进入高级管理确认 ↗</a></div>`);
             state.history.push({role:'assistant',content:answer}); state.history = state.history.slice(-10);
           }

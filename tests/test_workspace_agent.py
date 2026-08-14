@@ -349,6 +349,21 @@ def test_workspace_replaces_default_admin_page_and_preserves_advanced_console(tm
         assert "yunpai-admin-console" in advanced.text
 
 
+def test_workspace_product_summary_links_to_controlled_catalog_view(tmp_path) -> None:
+    app = create_app(make_settings(tmp_path))
+    with TestClient(app) as client:
+        workspace = client.get("/admin")
+        advanced = client.get("/admin/advanced?view=commerce")
+
+    assert workspace.status_code == 200
+    assert "查看详细商品" in workspace.text
+    assert "/admin/advanced?view=commerce" in workspace.text
+    assert "result.advanced_view" in workspace.text
+    assert advanced.status_code == 200
+    assert "requestedInitialView" in advanced.text
+    assert "new URLSearchParams(window.location.search)" in advanced.text
+
+
 def test_workspace_capabilities_are_authenticated_and_read_first(tmp_path) -> None:
     app = create_app(make_settings(tmp_path))
     with TestClient(app) as client:

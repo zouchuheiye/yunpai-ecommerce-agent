@@ -1174,7 +1174,15 @@
       document.querySelectorAll('.view').forEach((node) => node.classList.toggle('active', node.id === `view-${view}`));
       document.querySelectorAll('.nav button').forEach((node) => node.classList.toggle('active', node.dataset.view === view));
       $('viewTitle').textContent = titles[view];
-      loadView(view).catch((error) => toast(error.message));
+      return loadView(view).catch((error) => toast(error.message));
+    }
+
+    function requestedInitialView() {
+      const availableViews = new Set(
+        Array.from(document.querySelectorAll('.nav button[data-view]')).map((node) => node.dataset.view)
+      );
+      const requested = new URLSearchParams(window.location.search).get('view');
+      return requested && availableViews.has(requested) ? requested : 'overview';
     }
 
     async function loadOverview() {
@@ -3190,7 +3198,7 @@
         sessionStorage.setItem('yunpai.adminId', state.adminId); sessionStorage.setItem('yunpai.adminKey', state.adminKey);
         $('adminKey').value = '';
         hideLogin();
-        await loadOverview();
+        await switchView(requestedInitialView());
       } catch (error) { $('loginError').textContent = error.message; }
     });
 
@@ -3205,7 +3213,7 @@
           state.adminKey = '';
           $('logoutButton').hidden = true;
           hideLogin();
-          await loadOverview();
+          await switchView(requestedInitialView());
           return;
         }
       } catch (error) {
@@ -3214,7 +3222,7 @@
       $('logoutButton').hidden = false;
       if (state.adminId && state.adminKey) {
         $('adminId').value = state.adminId;
-        api('/v1/admin/overview').then(() => { hideLogin(); return loadOverview(); }).catch(() => showLogin());
+        api('/v1/admin/overview').then(() => { hideLogin(); return switchView(requestedInitialView()); }).catch(() => showLogin());
       } else {
         showLogin();
       }
