@@ -79,6 +79,51 @@ def test_product_search_requires_unique_resolution_before_dependent_query() -> N
     assert observation_data_status("search_products", resolved) == "success"
 
 
+def test_product_presenter_limits_catalog_summary_to_ten_items() -> None:
+    observation = {
+        "items": [
+            {
+                "title": f"Product {index:02d}",
+                "sku_id": f"SKU-{index:02d}",
+                "status": "active",
+            }
+            for index in range(1, 13)
+        ]
+    }
+
+    view = present_observation("get_catalog_status", observation)
+    facts = view["已核实信息"]
+    rendered = json.dumps(view, ensure_ascii=False)
+
+    assert len(facts) == 11
+    assert "Product 10" in rendered
+    assert "SKU-10" in rendered
+    assert "Product 11" not in rendered
+    assert "SKU-11" not in rendered
+
+
+def test_product_presenter_protects_displayed_names_and_skus() -> None:
+    observation = {
+        "items": [
+            {
+                "title": f"Product {index:02d}",
+                "sku_id": f"SKU-{index:02d}",
+                "status": "active",
+            }
+            for index in range(1, 13)
+        ]
+    }
+
+    view = present_observation("get_catalog_status", observation)
+    protected = set(critical_fact_values(view))
+
+    for index in range(1, 11):
+        assert f"Product {index:02d}" in protected
+        assert f"SKU-{index:02d}" in protected
+    assert "Product 11" not in protected
+    assert "SKU-11" not in protected
+
+
 def test_customer_service_is_expressed_as_people_and_work_not_internal_fields() -> None:
     view = present_observation(
         "get_customer_service_status",

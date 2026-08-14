@@ -57,6 +57,8 @@ STATUS_LABELS: dict[str, str] = {
     "slow_moving": "销售偏慢",
 }
 
+MAX_PRODUCT_FACTS = 10
+
 
 def tool_label(tool_name: str | None) -> str:
     return TOOL_LABELS.get(tool_name or "", "业务信息")
@@ -97,10 +99,14 @@ def present_observation(tool_name: str | None, observation: dict[str, Any]) -> d
         if data_status == "no_data"
         else handlers.get(tool_name or "", _fallback_facts)(observation)
     )
-    return {
+    product_view = {
         "查询内容": tool_label(tool_name),
         "已核实信息": facts or ["目前没有查到对应记录。"],
     }
+    required_values = _required_product_values(tool_name or "", observation)
+    if required_values:
+        product_view["必须保留值"] = required_values
+    return product_view
 
 
 def observation_data_status(
@@ -121,7 +127,11 @@ def observation_data_status(
 
 
 def critical_fact_values(product_view: dict[str, Any]) -> list[str]:
-    values: list[str] = []
+    values = [
+        str(value)
+        for value in product_view.get("必须保留值") or []
+        if str(value)
+    ]
     identifier_pattern = re.compile(r"\b(?=[A-Za-z0-9-]*\d)[A-Za-z][A-Za-z0-9-]*\b")
     number_pattern = re.compile(r"(?<![A-Za-z0-9])\d+(?:\.\d+)?")
     for fact in product_view.get("已核实信息") or []:
@@ -129,6 +139,25 @@ def critical_fact_values(product_view: dict[str, Any]) -> list[str]:
         for match in [*identifier_pattern.findall(text), *number_pattern.findall(text)]:
             if match not in values:
                 values.append(match)
+    return values
+
+
+def _required_product_values(
+    tool_name: str, observation: dict[str, Any]
+) -> list[str]:
+    if tool_name not in {
+        "get_catalog_status",
+        "get_product_facts",
+        "search_products",
+    }:
+        return []
+    values: list[str] = []
+    for item in _list(observation.get("items"))[:MAX_PRODUCT_FACTS]:
+        product = _dict(item)
+        for value in (product.get("title"), product.get("sku_id")):
+            text = str(value or "").strip()
+            if text and text not in values:
+                values.append(text)
     return values
 
 
@@ -297,13 +326,19 @@ def _product_line(item: Any) -> str:
 
 def _product_facts(observation: dict[str, Any]) -> list[str]:
     items = _list(observation.get("items"))
-    return [f"共找到 {len(items)} 个商品。", *[_product_line(item) for item in items[:8]]]
+    return [
+        f"共找到 {len(items)} 个商品。",
+        *[_product_line(item) for item in items[:MAX_PRODUCT_FACTS]],
+    ]
 
 
 def _product_search_facts(observation: dict[str, Any]) -> list[str]:
     items = _list(observation.get("items"))
     resolution = _status(observation.get("resolution"))
-    return [f"商品搜索结果：{resolution}，共找到 {len(items)} 个商品。", *[_product_line(item) for item in items[:8]]]
+    return [
+        f"商品搜索结果：{resolution}，共找到 {len(items)} 个商品。",
+        *[_product_line(item) for item in items[:MAX_PRODUCT_FACTS]],
+    ]
 
 
 def _order_facts(observation: dict[str, Any]) -> list[str]:
