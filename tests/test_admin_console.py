@@ -256,6 +256,27 @@ def test_admin_console_page_and_audit_api(tmp_path) -> None:
         assert audit.json()[0]["detail"]["virtual"] is True
 
 
+def test_admin_console_exposes_competitive_data_workbench(tmp_path) -> None:
+    app = create_app(make_settings(tmp_path))
+    with TestClient(app) as client:
+        page = client.get("/admin")
+
+    assert page.status_code == 200
+    for element_id in (
+        "competitiveDatasetForm",
+        "competitiveImportForm",
+        "competitiveDatasetFile",
+        "competitiveImportErrors",
+        "competitiveDatasetQueryForm",
+        "competitiveDatasetRows",
+        "competitiveQueryRankScope",
+    ):
+        assert f'id="{element_id}"' in page.text
+    assert "/v1/competitive/datasets/import" in page.text
+    assert "/v1/competitive/datasets/query" in page.text
+    assert "renderCompetitiveDatasets" in page.text
+
+
 def test_local_admin_bypass_is_loopback_only_and_keeps_client_authentication(tmp_path) -> None:
     settings = replace(make_settings(tmp_path / "local"), admin_auth_required=False)
     app = create_app(settings)

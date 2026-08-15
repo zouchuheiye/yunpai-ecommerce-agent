@@ -410,7 +410,7 @@
                 <div class="field wide"><label for="competitiveDatasetFile">CSV 文件</label><input class="input" id="competitiveDatasetFile" type="file" accept=".csv,text/csv" required></div>
                 <div class="field"><label for="competitiveImportConnector">连接器</label><input class="input" id="competitiveImportConnector" value="file-m6" required></div>
                 <div class="field"><label for="competitiveImportStore">店铺</label><input class="input" id="competitiveImportStore" value="virtual-shop-001" required></div>
-                <div class="field"><label for="competitiveImportSourceRef">来源引用</label><input class="input" id="competitiveImportSourceRef" value="file://competitive.csv" required></div>
+                <div class="field"><label for="competitiveImportSourceRef">来源引用</label><input class="input" id="competitiveImportSourceRef" value="competitive.csv" required></div>
                 <div class="wide"><button class="button primary" type="submit" id="importCompetitiveDataset">导入 CSV</button></div>
               </form>
               <div class="panel-body" style="padding-top:0"><div class="notice" id="competitiveImportSummary">异常行会跳过，有效行独立提交。</div></div>
@@ -432,6 +432,7 @@
               <div class="field"><label for="competitiveQueryRatingMax">最高五星评分</label><input class="input" id="competitiveQueryRatingMax" type="number" min="0" max="5" step="0.01"></div>
               <div class="field"><label for="competitiveQueryRankMin">最低排名值</label><input class="input" id="competitiveQueryRankMin" type="number" min="1" step="1"></div>
               <div class="field"><label for="competitiveQueryRankMax">最高排名值</label><input class="input" id="competitiveQueryRankMax" type="number" min="1" step="1"></div>
+              <div class="field"><label for="competitiveQueryRankScope">排名范围</label><input class="input" id="competitiveQueryRankScope" placeholder="例如：平台日榜"></div>
               <div class="field"><label for="competitiveQueryDimensionKey">维度键</label><input class="input" id="competitiveQueryDimensionKey"></div>
               <div class="field"><label for="competitiveQueryDimensionType">维度类型</label><select class="input" id="competitiveQueryDimensionType"><option value="text">文本</option><option value="number">数值</option><option value="boolean">布尔</option></select></div>
               <div class="field"><label for="competitiveQueryDimensionValue">维度值</label><input class="input" id="competitiveQueryDimensionValue"></div>
@@ -1596,11 +1597,12 @@
       const textFields = {
         store_id:'competitiveQueryStore', subject_sku:'competitiveQuerySubjectSku',
         status:'competitiveQueryStatus', category:'competitiveQueryCategory',
-        brand:'competitiveQueryBrand', currency:'competitiveQueryCurrency'
+        brand:'competitiveQueryBrand', currency:'competitiveQueryCurrency',
+        rank_scope:'competitiveQueryRankScope'
       };
       Object.entries(textFields).forEach(([key,id]) => { const value = $(id).value.trim(); if (value) payload[key] = key === 'currency' ? value.toUpperCase() : value; });
       const numericFields = {
-        competitor_price_min:'competitiveQueryPriceMin', competitor_price_max:'competitiveQueryPriceMax',
+        price_min:'competitiveQueryPriceMin', price_max:'competitiveQueryPriceMax',
         rating_min:'competitiveQueryRatingMin', rating_max:'competitiveQueryRatingMax',
         sales_rank_min:'competitiveQueryRankMin', sales_rank_max:'competitiveQueryRankMax'
       };
@@ -1630,8 +1632,7 @@
       }).join('');
     }
 
-    async function queryCompetitiveDatasets() {
-      const result = await api('/v1/competitive/datasets/query', { method:'POST', body:JSON.stringify(competitiveQueryPayload()) });
+    function renderCompetitiveDatasets(result) {
       $('competitiveDatasetCount').textContent = `${result.count} 条`;
       $('competitiveDatasetRows').innerHTML = result.items.length ? result.items.map((item) => {
         const observation = item.latest_observation;
@@ -1641,6 +1642,11 @@
         return `<tr><td><strong>${escapeHtml(identity.title)}</strong><div>${escapeHtml(identity.brand || '-')} · ${escapeHtml(identity.model || '-')}</div><div class="muted">${escapeHtml(identity.category || '-')} · ${escapeHtml(item.match.competitor_sku)}</div></td><td>${escapeHtml(observation.subject_price)} / <strong>${escapeHtml(observation.competitor_price)}</strong> ${escapeHtml(observation.currency)}</td><td>${rating}</td><td>${rank}</td><td>${competitiveDimensionSummary(identity.custom_dimensions)}</td><td><span class="status ${statusClass(item.match.status)}">${escapeHtml(item.match.status)}</span><div class="muted">锁 ${item.match.record_version}</div></td><td>${escapeHtml(observation.source_type)}${observation.is_estimate ? ' · 估算' : ''}<div class="muted">${formatTime(observation.observed_at)}</div></td><td>${renderCompetitiveMatchActions(item.match)}</td></tr>`;
       }).join('') : '<tr><td colspan="8"><div class="empty">当前条件下没有竞品数据</div></td></tr>';
       bindCompetitiveMatchActions();
+    }
+
+    async function queryCompetitiveDatasets() {
+      const result = await api('/v1/competitive/datasets/query', { method:'POST', body:JSON.stringify(competitiveQueryPayload()) });
+      renderCompetitiveDatasets(result);
       return result;
     }
 
@@ -2640,9 +2646,9 @@
         });
         const importPath = '/v1/competitive/datasets/import';
         const result = await api(`${importPath}?${params.toString()}`, {
-          method:'POST', headers:{'Content-Type':'text/csv; charset=utf-8'}, body:await file.text()
+          method:'POST', headers:{'Content-Type':'text/csv'}, body:await file.arrayBuffer()
         });
-        $('competitiveImportSummary').innerHTML = `<strong>处理 ${result.total_rows} 行</strong><div>新增 ${result.imported_count} 行，幂等 ${result.idempotent_count} 行，异常 ${result.error_count} 行。</div>`;
+        $('competitiveImportSummary').innerHTML = `<strong>处理 ${result.total_rows} 行</strong><div>接受 ${result.accepted_rows} 行（新增 ${result.applied}，幂等 ${result.idempotent}），拒绝 ${result.rejected_rows} 行。</div>`;
         $('competitiveImportErrors').innerHTML = result.errors.length ? result.errors.map((item) => `<tr><td>${item.row}</td><td class="mono">${escapeHtml(item.field)}</td><td class="mono">${escapeHtml(item.code)}</td><td>${escapeHtml(item.message)}</td></tr>`).join('') : '<tr><td colspan="4"><div class="empty">本次导入没有错误</div></td></tr>';
         $('competitiveQueryStore').value = $('competitiveImportStore').value.trim();
         toast('竞品 CSV 导入完成');
