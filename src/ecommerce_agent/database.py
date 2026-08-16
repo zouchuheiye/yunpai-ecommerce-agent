@@ -2200,6 +2200,7 @@ class Database:
             """
         )
 
+    @classmethod
     def _apply_v26(cls, conn: sqlite3.Connection) -> None:
         exists = conn.execute(
             "SELECT 1 FROM sqlite_master "
